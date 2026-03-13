@@ -1,6 +1,6 @@
 # Data & Management Commands Reference
 
-Complete reference for `db`, `finding`, `module`, `extensions`, `config`, `scope`, `source`, `strategy`, `export`, and `version` commands.
+Complete reference for `db`, `finding`, `module`, `extensions`, `js`, `config`, `scope`, `source`, `strategy`, `export`, and `version` commands.
 
 ## Table of Contents
 
@@ -13,6 +13,7 @@ Complete reference for `db`, `finding`, `module`, `extensions`, `config`, `scope
 - [export (top-level)](#export)
 - [module](#module)
 - [extensions](#extensions)
+- [js](#js)
 - [config](#config)
 - [scope](#scope)
 - [source](#source)
@@ -77,6 +78,8 @@ List database records with filtering, sorting, and display options.
 | `--severity` | string | — | Filter findings by severity |
 | `--min-risk` | int | `0` | Show only records with risk score at or above this value |
 | `--remark` | string | — | Filter records containing this text in remarks |
+| `--module-type` | string | — | Filter findings by module type (active, passive, nuclei, secret-scan, agent, source-tools, oast, extension) |
+| `--finding-source` | string | — | Filter findings by source (audit, spa, agent, oast, source-tools, extension) |
 | `--from` | string | — | Records after date (YYYY-MM-DD) |
 | `--to` | string | — | Records before date |
 | `--header` | string | — | Search within HTTP header names and values |
@@ -211,9 +214,36 @@ vigolium db clean --force  # reset entire database
 
 ## finding
 
-**Usage:** `vigolium finding [flags]` (aliases: `findings`)
+**Usage:** `vigolium finding [search-term] [flags]` (aliases: `findings`)
 
-Browse vulnerability findings. Shortcut for `vigolium db ls --table findings`. Accepts all the same flags as `db list`.
+Browse vulnerability findings with fuzzy search, filtering, raw display, and column selection.
+
+### Finding-specific filter flags
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--severity` | — | string | — | Filter by severity (comma-separated: critical,high,medium,low,info) |
+| `--scan-id` | — | string | — | Filter by scan session ID |
+| `--module-type` | — | string | — | Filter by module type (active, passive, nuclei, secret-scan, agent, source-tools, oast, extension) |
+| `--finding-source` | — | string | — | Filter by finding source (audit, spa, agent, oast, source-tools, extension) |
+| `--id` | — | int | `0` | Filter by finding ID |
+
+### Display flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--raw` | bool | `false` | Show full raw HTTP request and response for each finding |
+| `--burp` | bool | `false` | Display in Burp Suite-style format (colored request/response) |
+| `--columns` | []string | — | Columns to show (comma-separated, e.g. ID,SEVERITY,MODULE) |
+| `--exclude-columns` | []string | — | Columns to hide (comma-separated) |
+
+Also accepts filter flags: `--host`, `--method`, `--status`, `--path`, `--from`, `--to`, `--search`, `--header`, `--body`, `--source`, `--sort`, `--asc`, `--limit`, `--offset`.
+
+### Available columns
+
+ID, SEVERITY, CONFIDENCE, MODULE, MODULE_ID, SHORT_DESC, DESCRIPTION, TYPE, SOURCE, MATCHED_AT, FOUND_AT, SCAN_UUID, TAGS
+
+Default columns: ID, SEVERITY, MODULE, SHORT_DESC, TYPE, SOURCE, MATCHED_AT
 
 ### Examples
 
@@ -221,6 +251,12 @@ Browse vulnerability findings. Shortcut for `vigolium db ls --table findings`. A
 vigolium finding
 vigolium finding --severity high,critical
 vigolium finding --search "sql injection"
+vigolium finding --module-type active
+vigolium finding --finding-source audit
+vigolium finding --id 42
+vigolium finding --burp
+vigolium finding --raw
+vigolium finding --columns ID,SEVERITY,MODULE,MATCHED_AT,TAGS
 vigolium finding --sort severity --asc
 vigolium finding --watch 5s
 ```
@@ -353,6 +389,96 @@ echo 'vigolium.utils.md5("hello")' | vigolium ext eval --stdin
 
 ---
 
+## js
+
+**Usage:** `vigolium js [flags]`
+
+Execute JavaScript code with access to the full `vigolium.*` API surface. Reads from stdin by default, or use `--code` / `--code-file` for inline or file input. TypeScript files (`.ts`) are auto-transpiled.
+
+### Input methods (mutually exclusive, in order of precedence)
+
+1. `--code` — Inline JavaScript code
+2. `--code-file` — Path to JavaScript/TypeScript file
+3. stdin (default) — Read JS code from piped input
+
+### js flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--code` | string | — | Inline JavaScript code to execute |
+| `--code-file` | string | — | Path to JavaScript/TypeScript file (auto-transpiles `.ts`) |
+| `--target` | string | — | Set TARGET variable in JS scope (URL string) |
+| `--timeout` | duration | `30s` | Execution timeout (e.g., `60s`, `2m`) |
+| `--format` | string | `json` | Output format: `json` or `text` |
+
+### Available API
+
+The JS VM provides access to all `vigolium.*` namespaces:
+
+| Namespace | Description |
+|-----------|-------------|
+| `vigolium.http` | HTTP requests, sessions, batch, replay, sequence, auth testing, GraphQL, caching |
+| `vigolium.utils` | Encoding, hashing, diff, similarity, JWT, CSS selectors, multipart, file I/O |
+| `vigolium.parse` | URL, HTTP request/response, HTML, headers, cookies, query, JSON, form parsing |
+| `vigolium.scan` | Module listing, scope, finding creation, scan control |
+| `vigolium.db` | HTTP record and finding queries, annotations, comparison |
+| `vigolium.ingest` | URL, curl, raw HTTP, OpenAPI, Postman ingestion |
+| `vigolium.source` | Source code file listing, reading, searching |
+| `vigolium.agent` | AI-augmented analysis (ask, chat, complete, generatePayloads, analyzeResponse, confirmFinding) |
+| `vigolium.oast` | Out-of-band testing (enabled, payload, poll) |
+| `vigolium.log` | Logging (info, warn, error, debug) |
+| `vigolium.config` | Read-only config variables |
+| `vigolium.payloads(type)` | Built-in payload wordlists (xss, sqli, ssti, ssrf, lfi, etc.) |
+
+### Return value
+
+- Returns `undefined`/`null` → no output
+- Otherwise → JSON-stringified return value on stdout
+- With `--format text` → JSON strings are unquoted
+
+### Examples
+
+```bash
+# Inline code
+vigolium js --code 'vigolium.http.get("https://example.com/api/health")'
+
+# From a file
+vigolium js --code-file scanner-script.js
+
+# TypeScript auto-transpilation
+vigolium js --code-file scanner.ts
+
+# From stdin (ideal for agent/pipe workflows)
+echo 'vigolium.utils.md5("password123")' | vigolium js
+
+# With target context (accessible as TARGET variable)
+vigolium js --target https://example.com --code 'vigolium.http.get(TARGET + "/api/users")'
+
+# Custom timeout and text output
+vigolium js --timeout 60s --format text --code 'vigolium.utils.sha256("hello")'
+
+# Query database records
+vigolium js --code 'JSON.stringify(vigolium.db.records.query({ hostname: "example.com", limit: 5 }))'
+
+# Ingest and scan
+vigolium js --code 'vigolium.ingest.url("https://example.com/api/users"); vigolium.scan.startNewScan({ targets: ["https://example.com"] })'
+
+# Use AI to generate payloads
+vigolium js --code 'JSON.stringify(vigolium.agent.generatePayloads({ type: "xss", context: "HTML attribute", count: 5 }))'
+```
+
+### Differences from `vigolium ext eval`
+
+| Feature | `vigolium js` | `vigolium ext eval` |
+|---------|---------------|---------------------|
+| Input methods | `--code`, `--code-file`, stdin | positional arg, `--ext-file`, `--stdin` |
+| Target context | `--target` sets `TARGET` variable | Not available |
+| Timeout | Configurable via `--timeout` | Not configurable |
+| Output format | `--format json\|text` | Direct output |
+| Use case | General scripting, automation | Quick extension testing |
+
+---
+
 ## config
 
 **Usage:** `vigolium config <subcommand>`
@@ -378,7 +504,7 @@ vigolium config ls --force         # show sensitive values (unredacted)
 
 vigolium config set scanning_strategy.default_strategy deep
 vigolium config set scope.origin.mode strict
-vigolium config set dynamic_assessment.extensions.enabled true
+vigolium config set audit.extensions.enabled true
 vigolium config set notify.enabled true
 ```
 

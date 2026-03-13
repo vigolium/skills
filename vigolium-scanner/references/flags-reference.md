@@ -13,11 +13,13 @@ Alphabetical index of all vigolium CLI flags across all commands.
 - [Agent Flags](#agent-flags)
 - [Agent Autopilot Flags](#agent-autopilot-flags)
 - [Agent Pipeline Flags](#agent-pipeline-flags)
+- [Agent Swarm Flags](#agent-swarm-flags)
 - [Traffic Flags](#traffic-flags)
 - [DB Flags](#db-flags)
 - [Export Flags](#export-flags)
 - [Module Flags](#module-flags)
 - [Extensions Flags](#extensions-flags)
+- [JS Flags](#js-flags)
 - [Source Add Flags](#source-add-flags)
 
 ---
@@ -44,6 +46,7 @@ Persistent flags available on every command.
 | `--input-mode` | `-I` | string | `urls` | Input format: urls, openapi, swagger, burp, curl, nuclei, har |
 | `--input-read-timeout` | — | duration | `3m` | Timeout for reading input |
 | `--json` | `-j` | bool | `false` | Format output as JSONL (one JSON object per line) |
+| `--ci-output-format` | — | bool | `false` | CI-friendly output: JSONL findings only, no color, no banners |
 | `--list-input-mode` | — | bool | `false` | List supported input modes |
 | `--list-modules` | `-M` | bool | `false` | List scanner modules |
 | `--log-file` | — | string | — | Write logs to file (JSON format) |
@@ -101,7 +104,7 @@ Flags specific to `vigolium scan` and `vigolium run`.
 | `--no-forms` | — | bool | `false` | Disable automatic form detection and filling during spidering |
 | `--oast-url` | — | string | — | Fixed out-of-band callback URL (overrides auto-generated interactsh URL) |
 | `--output` | `-o` | string | — | Output file path |
-| `--repo` | — | string | — | SAST repo path |
+| `--sast-adhoc` | — | string | — | Ad-hoc SAST scan: local path or git URL (auto-detected) |
 | `--required-only` | — | bool | `false` | Parse only required fields from input format (ignore optional) |
 | `--retries` | — | int | `1` | Retry attempts |
 | `--rule` | — | string | — | SAST rule filter |
@@ -197,8 +200,7 @@ Flags specific to `vigolium agent`.
 | `--output` | string | — | Output file |
 | `--prompt-file` | string | — | Prompt template file |
 | `--prompt-template` | string | — | Prompt template ID |
-| `--repo` | string | — | Source code path |
-| `--source` | string | — | Label for records ingested from agent output (e.g. 'agent-review') |
+| `--source` | string | — | Path to application source code |
 
 Flags specific to `vigolium agent query`.
 
@@ -208,7 +210,7 @@ Flags specific to `vigolium agent query`.
 | `--agent-timeout` | — | duration | `5m` | Maximum time for agent execution (0 = no limit) |
 | `--output` | — | string | — | Output file |
 | `--prompt` | `-p` | string | — | Prompt text to send to the agent |
-| `--source` | — | string | — | Label for records ingested from agent output (e.g. 'agent-review') |
+| `--source` | — | string | — | Path to application source code |
 | `--stdin` | — | bool | `false` | Read from stdin |
 
 ---
@@ -221,7 +223,7 @@ Flags specific to `vigolium agent autopilot`.
 |------|-------|------|---------|-------------|
 | `--target` | `-t` | string | — | Target URL (required) |
 | `--agent` | — | string | from config | Agent backend |
-| `--repo` | — | string | — | Source code repository path |
+| `--source` | — | string | — | Path to application source code |
 | `--files` | — | []string | — | Specific files to include |
 | `--focus` | — | string | — | Focus area hint |
 | `--system-prompt` | — | string | — | Custom system prompt file |
@@ -239,15 +241,88 @@ Flags specific to `vigolium agent pipeline`.
 |------|-------|------|---------|-------------|
 | `--target` | `-t` | string | — | Target URL (required) |
 | `--agent` | — | string | from config | Agent backend |
-| `--repo` | — | string | — | Source code repository path |
+| `--source` | — | string | — | Path to application source code (enables Phase 0) |
 | `--files` | — | []string | — | Specific files to include |
 | `--focus` | — | string | — | Focus area hint for planning |
 | `--timeout` | — | duration | `1h` | Maximum total pipeline duration |
 | `--max-rescan-rounds` | — | int | `2` | Max triage→rescan iterations |
-| `--skip-phase` | — | []string | — | Skip phases (discover, plan, scan, triage, rescan, report) |
+| `--skip-phase` | — | []string | — | Skip phases (source-analysis, discover, plan, scan, triage, rescan, report) |
 | `--start-from` | — | string | — | Resume from a specific phase |
 | `--profile` | — | string | — | Scanning profile for scan phases |
 | `--dry-run` | — | bool | `false` | Preview agent prompts |
+
+---
+
+## Agent Swarm Flags
+
+Flags specific to `vigolium agent swarm`.
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--target` | `-t` | string | — | Target URL (required when `--source` is used without other inputs) |
+| `--input` | — | string | — | Raw input (curl, raw HTTP, Burp XML, URL). Use `-` for stdin |
+| `--record-uuid` | — | string | — | HTTP record UUID from database |
+| `--source` | — | string | — | Path to application source code for route discovery |
+| `--files` | — | []string | — | Specific source files to include (relative to `--source`) |
+| `--vuln-type` | — | string | — | Vulnerability type focus (e.g., sqli, xss, ssrf, auth, idor) |
+| `--modules` | `-m` | []string | — | Explicit module names to include |
+| `--max-iterations` | — | int | `3` | Maximum triage-rescan iterations |
+| `--agent` | — | string | from config | Agent backend |
+| `--agent-acp-cmd` | — | string | — | Custom ACP agent command override (overrides `--agent`) |
+| `--timeout` | — | duration | `15m` | Maximum swarm duration |
+| `--profile` | — | string | — | Scanning profile |
+| `--only` | — | string | — | Run only this scanning phase |
+| `--skip` | — | []string | — | Skip specific scanning phases |
+| `--dry-run` | — | bool | `false` | Render prompts without executing |
+| `--show-prompt` | — | bool | `false` | Print rendered prompts to stderr before executing |
+| `--source-analysis-only` | — | bool | `false` | Run only source analysis phase and exit (requires `--source`) |
+| `--instruction` | — | string | — | Custom instruction to guide the agent |
+| `--instruction-file` | — | string | — | Path to file containing custom instructions |
+
+---
+
+## Finding Flags
+
+Flags specific to `vigolium finding` (aliases: `findings`).
+
+### Finding filter flags (persistent)
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--host` | — | string | — | Filter by hostname pattern |
+| `--method` | — | []string | — | Filter by HTTP method (repeatable) |
+| `--status` | — | []int | — | Filter by HTTP status code (repeatable) |
+| `--path` | — | string | — | Filter by URL path pattern |
+| `--from` | — | string | — | Show findings after date |
+| `--to` | — | string | — | Show findings before date |
+| `--search` | — | string | — | Search across descriptions, module IDs, and matched_at |
+| `--header` | — | string | — | Search within HTTP header names and values |
+| `--body` | — | string | — | Search within HTTP request/response body content |
+| `--source` | — | string | — | Filter by record source |
+| `--sort` | — | string | `found_at` | Sort by: found_at, created_at, severity, module, confidence |
+| `--asc` | — | bool | `false` | Sort ascending |
+| `--limit` | `-n` | int | `100` | Maximum findings to display |
+| `--offset` | `-o` | int | `0` | Number of findings to skip |
+| `--severity` | — | string | — | Filter by severity (comma-separated: critical,high,medium,low,info) |
+| `--scan-id` | — | string | — | Filter by scan session ID |
+| `--module-type` | — | string | — | Filter by module type (active, passive, nuclei, secret-scan, agent, source-tools, oast, extension) |
+| `--finding-source` | — | string | — | Filter by finding source (audit, spa, agent, oast, source-tools, extension) |
+| `--id` | — | int | `0` | Filter by finding ID |
+
+### Finding display flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--raw` | bool | `false` | Show full raw HTTP request and response for each finding |
+| `--burp` | bool | `false` | Display in Burp Suite-style format (colored request/response) |
+| `--columns` | []string | — | Columns to show (comma-separated, e.g. ID,SEVERITY,MODULE) |
+| `--exclude-columns` | []string | — | Columns to hide (comma-separated) |
+
+### Finding available columns
+
+ID, SEVERITY, CONFIDENCE, MODULE, MODULE_ID, SHORT_DESC, DESCRIPTION, TYPE, SOURCE, MATCHED_AT, FOUND_AT, SCAN_UUID, TAGS
+
+Default columns: ID, SEVERITY, MODULE, SHORT_DESC, TYPE, SOURCE, MATCHED_AT
 
 ---
 
@@ -298,6 +373,35 @@ Shared across db subcommands.
 |------|------|---------|-------------|
 | `--table` | string | — | Table name |
 | `--search` | string | — | Quick search |
+
+DB list flags.
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--tree` | — | bool | `false` | Hierarchical tree format |
+| `--raw` | — | bool | `false` | Full raw HTTP request and response |
+| `--list-tables` | — | bool | `false` | List all database table names |
+| `--list-columns` | — | bool | `false` | List column names for the current table |
+| `--limit` | `-n` | int | `100` | Max records |
+| `--offset` | `-o` | int | `0` | Records to skip |
+| `--columns` | — | []string | — | Columns to include |
+| `--exclude-columns` | — | []string | — | Columns to exclude |
+| `--host` | — | string | — | Filter by hostname |
+| `--method` | — | []string | — | Filter by HTTP method |
+| `--status` | — | []int | — | Filter by HTTP status code |
+| `--path` | — | string | — | Filter by URL path |
+| `--scan-id` | — | string | — | Filter by scan session ID |
+| `--severity` | — | string | — | Filter findings by severity |
+| `--min-risk` | — | int | `0` | Show only records with risk score at or above this value |
+| `--remark` | — | string | — | Filter records containing this text in remarks |
+| `--module-type` | — | string | — | Filter findings by module type (active, passive, nuclei, secret-scan, agent, source-tools, oast, extension) |
+| `--finding-source` | — | string | — | Filter findings by source (audit, spa, agent, oast, source-tools, extension) |
+| `--from` | — | string | — | Records after date |
+| `--to` | — | string | — | Records before date |
+| `--header` | — | string | — | Search within HTTP headers |
+| `--body` | — | string | — | Search within request/response body |
+| `--sort` | — | string | `created_at` | Sort field |
+| `--asc` | — | bool | `false` | Sort ascending |
 
 DB clean flags.
 
@@ -357,6 +461,20 @@ Top-level `vigolium export` flags.
 | `--ext-file` | string | — | JS file to evaluate (eval) |
 | `--stdin` | bool | `false` | Read from stdin (eval) |
 | `--type` | string | `all` | Filter type (ls) |
+
+---
+
+## JS Flags
+
+Flags specific to `vigolium js`.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--code` | string | — | Inline JavaScript code to execute |
+| `--code-file` | string | — | Path to JavaScript/TypeScript file (auto-transpiles `.ts`) |
+| `--target` | string | — | Set TARGET variable in JS scope (URL string) |
+| `--timeout` | duration | `30s` | Execution timeout (e.g., `60s`, `2m`) |
+| `--format` | string | `json` | Output format: `json` or `text` |
 
 ---
 

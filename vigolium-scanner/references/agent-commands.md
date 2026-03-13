@@ -1,6 +1,6 @@
 # Agent Commands Reference
 
-Complete flag reference for `agent`, `agent query`, `agent autopilot`, and `agent pipeline` commands.
+Complete flag reference for `agent`, `agent query`, `agent autopilot`, `agent pipeline`, and `agent swarm` commands.
 
 ## Table of Contents
 
@@ -8,6 +8,7 @@ Complete flag reference for `agent`, `agent query`, `agent autopilot`, and `agen
 - [agent query](#agent-query)
 - [agent autopilot](#agent-autopilot)
 - [agent pipeline](#agent-pipeline)
+- [agent swarm](#agent-swarm)
 - [Prompt Templates](#prompt-templates)
 - [Agent Configuration](#agent-configuration)
 - [Output Schemas](#output-schemas)
@@ -27,11 +28,10 @@ Run an AI coding agent for security code review, endpoint discovery, or custom a
 | `--agent` | string | from config | Agent backend to use |
 | `--prompt-template` | string | — | Prompt template ID (e.g. security-code-review) |
 | `--prompt-file` | string | — | Path to a prompt template file |
-| `--repo` | string | — | Path to source code repository |
-| `--files` | []string | — | Specific files to include (relative to --repo) |
+| `--source` | string | — | Path to application source code |
+| `--files` | []string | — | Specific files to include (relative to --source) |
 | `--append` | string | — | Append extra text to the rendered prompt |
 | `--output` | string | — | Write agent output to this file |
-| `--source` | string | — | Label for records ingested from agent output (e.g. 'agent-review') |
 | `--list-templates` | bool | `false` | List available prompt templates |
 | `--list-agents` | bool | `false` | List configured agent backends |
 | `--dry-run` | bool | `false` | Print the rendered prompt without executing |
@@ -41,30 +41,30 @@ Run an AI coding agent for security code review, endpoint discovery, or custom a
 
 ```bash
 # Security code review
-vigolium agent --prompt-template security-code-review --repo ./src
+vigolium agent --prompt-template security-code-review --source ./src
 
 # Endpoint discovery
-vigolium agent --prompt-template endpoint-discovery --repo ./src
+vigolium agent --prompt-template endpoint-discovery --source ./src
 
 # Custom prompt file
-vigolium agent --prompt-file custom-prompt.md --repo ./src
+vigolium agent --prompt-file custom-prompt.md --source ./src
 
 # With specific agent backend
-vigolium agent --agent claude --prompt-template security-code-review --repo ./src
+vigolium agent --agent claude --prompt-template security-code-review --source ./src
 
 # Append instructions to prompt
-vigolium agent --prompt-template security-code-review --repo ./src \
+vigolium agent --prompt-template security-code-review --source ./src \
   --append "Focus on authentication and authorization issues"
 
 # Specific files only
-vigolium agent --prompt-template security-code-review --repo ./src \
+vigolium agent --prompt-template security-code-review --source ./src \
   --files "src/auth.go,src/middleware.go"
 
 # Dry run (preview prompt)
-vigolium agent --prompt-template security-code-review --repo ./src --dry-run
+vigolium agent --prompt-template security-code-review --source ./src --dry-run
 
 # Save output
-vigolium agent --prompt-template security-code-review --repo ./src \
+vigolium agent --prompt-template security-code-review --source ./src \
   --output review-results.json
 
 # List available templates
@@ -90,7 +90,7 @@ Send a freeform prompt to an AI agent without templates or structured output. Pr
 | `--prompt` | `-p` | string | — | Prompt text to send to the agent |
 | `--stdin` | — | bool | `false` | Read prompt from stdin |
 | `--output` | — | string | — | Write agent output to this file |
-| `--source` | — | string | — | Source identifier for ingested records |
+| `--source` | — | string | — | Path to application source code |
 | `--agent-timeout` | — | duration | `5m` | Maximum time for agent execution (0 = no limit) |
 
 ### Examples
@@ -129,8 +129,8 @@ Launch an AI agent that autonomously discovers, scans, and triages vulnerabiliti
 |------|-------|------|---------|-------------|
 | `--target` | `-t` | string | — | Target URL (**required**) |
 | `--agent` | — | string | from config | Agent backend to use |
-| `--repo` | — | string | — | Path to source code repository for context |
-| `--files` | — | []string | — | Specific files to include (relative to --repo) |
+| `--source` | — | string | — | Path to application source code |
+| `--files` | — | []string | — | Specific files to include (relative to --source) |
 | `--focus` | — | string | — | Focus area hint (e.g. "API injection", "auth bypass") |
 | `--system-prompt` | — | string | — | Custom system prompt file (overrides default) |
 | `--timeout` | — | duration | `30m` | Maximum duration for the autopilot session |
@@ -156,7 +156,7 @@ The autopilot agent executes commands within a strict sandbox:
 vigolium agent autopilot -t https://example.com
 
 # With source code context and focus area
-vigolium agent autopilot -t https://api.example.com --repo ./src --focus "auth bypass"
+vigolium agent autopilot -t https://api.example.com --source ./src --focus "auth bypass"
 
 # Custom limits
 vigolium agent autopilot -t https://example.com --max-commands 50 --timeout 15m
@@ -177,20 +177,21 @@ vigolium agent autopilot -t https://example.com --agent gemini
 
 **Usage:** `vigolium agent pipeline [flags]`
 
-Run a fixed multi-phase scanning pipeline where native Go code handles heavy lifting and AI agents only intervene at checkpoints (phases 2 and 4). This keeps costs low while leveraging AI for strategic decisions.
+Run a fixed multi-phase scanning pipeline where native Go code handles heavy lifting and AI agents only intervene at checkpoints (phases 0, 2, and 4). This keeps costs low while leveraging AI for strategic decisions.
 
 ### Pipeline Phases
 
 ```
-Phase 1: Discover  → Native deparos + spidering (no AI)
-Phase 2: Plan      → Agent analyzes discovery results → AttackPlan
-Phase 3: Scan      → Native executor with agent-selected modules (no AI)
-Phase 4: Triage    → Agent reviews findings → TriageResult
-Phase 5: Rescan    → Targeted re-scanning from triage recommendations (no AI)
-Phase 6: Report    → Structured output from DB (no AI)
+Phase 0: Source Analysis  → AI extracts routes, auth config, extensions from source code (conditional)
+Phase 1: Discover         → Native deparos + spidering (no AI)
+Phase 2: Plan             → Agent analyzes discovery results → AttackPlan
+Phase 3: Scan             → Native executor with agent-selected modules (no AI)
+Phase 4: Triage           → Agent reviews findings → TriageResult
+Phase 5: Rescan           → Targeted re-scanning from triage recommendations (no AI)
+Phase 6: Report           → Structured output from DB (no AI)
 ```
 
-The triage→rescan loop (phases 4-5) repeats until the agent sets verdict to `"done"` or the max rescan rounds are reached.
+Phase 0 is **automatically skipped** when `--source` is not provided. The triage→rescan loop (phases 4-5) repeats until the agent sets verdict to `"done"` or the max rescan rounds are reached.
 
 ### agent pipeline flags
 
@@ -198,8 +199,8 @@ The triage→rescan loop (phases 4-5) repeats until the agent sets verdict to `"
 |------|-------|------|---------|-------------|
 | `--target` | `-t` | string | — | Target URL (**required**) |
 | `--agent` | — | string | from config | Agent backend to use |
-| `--repo` | — | string | — | Path to source code repository for agent context |
-| `--files` | — | []string | — | Specific source files to include (relative to --repo) |
+| `--source` | — | string | — | Path to application source code |
+| `--files` | — | []string | — | Specific source files to include (relative to --source) |
 | `--focus` | — | string | — | Focus area hint for the planning agent |
 | `--timeout` | — | duration | `1h` | Maximum total pipeline duration |
 | `--max-rescan-rounds` | — | int | `2` | Maximum triage→rescan iterations |
@@ -238,7 +239,7 @@ The triage→rescan loop (phases 4-5) repeats until the agent sets verdict to `"
   "confirmed": [
     {
       "title": "SQL Injection in /api/users",
-      "module_id": "active-sqli-error-based",
+      "module_id": "sqli-error-based",
       "url": "https://example.com/api/users?id=1",
       "reason": "Error-based response confirms MySQL injection"
     }
@@ -246,7 +247,7 @@ The triage→rescan loop (phases 4-5) repeats until the agent sets verdict to `"
   "false_positives": [
     {
       "title": "XSS in /static/page",
-      "module_id": "active-xss",
+      "module_id": "xss",
       "url": "https://example.com/static/page",
       "reason": "Static HTML page, no user input reflected"
     }
@@ -273,7 +274,7 @@ The `verdict` field controls the rescan loop: `"rescan"` triggers another round,
 vigolium agent pipeline -t https://example.com
 
 # With focus and source code
-vigolium agent pipeline -t https://example.com --focus "SQL injection" --repo ./src
+vigolium agent pipeline -t https://example.com --focus "SQL injection" --source ./src
 
 # Control rescan iterations
 vigolium agent pipeline -t https://example.com --max-rescan-rounds 3
@@ -294,8 +295,193 @@ vigolium agent pipeline -t https://example.com --skip-phase triage --skip-phase 
 vigolium agent pipeline -t https://example.com --agent gemini
 
 # Specific source files for agent context
-vigolium agent pipeline -t https://example.com --repo ./src \
+vigolium agent pipeline -t https://example.com --source ./src \
   --files "routes.go,handlers.go"
+```
+
+---
+
+## agent swarm
+
+**Usage:** `vigolium agent swarm [flags]`
+
+Deep, targeted vulnerability scanning of a **single HTTP request**. A master AI agent analyzes the request, selects scanner modules, generates custom JavaScript attack extensions, executes the scan, and triages the results — all in one command.
+
+Unlike pipeline (which scans an entire target), swarm focuses on a **single request** and applies deep, targeted analysis to it.
+
+### Supported Input Types
+
+Inputs are auto-detected from their content:
+
+| Type | Example | Detection |
+|------|---------|-----------|
+| **URL** | `https://example.com/api/users` | Starts with `http://` or `https://` |
+| **Curl** | `curl -X POST https://...` | Starts with `curl ` |
+| **Raw HTTP** | `POST /api HTTP/1.1\r\n...` | Starts with HTTP method + path |
+| **Burp XML** | `<?xml...><items>...</items>` | Starts with `<?xml` or `<items` |
+| **Record UUID** | `550e8400-e29b-...` | Matches UUID format (8-4-4-4-12 hex) |
+
+### agent swarm flags
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--target` | `-t` | string | — | Target URL (required when `--source` is used without other inputs) |
+| `--input` | — | string | — | Raw input (curl command, raw HTTP, Burp XML, URL). Use `-` for stdin |
+| `--record-uuid` | — | string | — | HTTP record UUID from database |
+| `--source` | — | string | — | Path to application source code for route discovery (enables source analysis phase) |
+| `--files` | — | []string | — | Specific source files to include (relative paths to `--source`) |
+| `--vuln-type` | — | string | — | Vulnerability type focus (e.g., `sqli`, `xss`, `ssrf`, `auth`, `idor`) |
+| `--modules` | `-m` | []string | — | Explicit module names to include alongside agent selections |
+| `--max-iterations` | — | int | `3` | Maximum triage-rescan iterations |
+| `--agent` | — | string | from config | Agent backend to use |
+| `--agent-acp-cmd` | — | string | — | Custom ACP agent command override (e.g., `traecli acp`); overrides `--agent` |
+| `--timeout` | — | duration | `15m` | Maximum swarm duration |
+| `--profile` | — | string | — | Scanning profile to use |
+| `--only` | — | string | — | Run only this scanning phase |
+| `--skip` | — | []string | — | Skip specific scanning phases |
+| `--dry-run` | — | bool | `false` | Render prompts without executing |
+| `--show-prompt` | — | bool | `false` | Print rendered prompts to stderr before executing |
+| `--source-analysis-only` | — | bool | `false` | Run only the source analysis phase and exit (requires `--source`) |
+| `--instruction` | — | string | — | Custom instruction to guide the agent (appended to all prompts) |
+| `--instruction-file` | — | string | — | Path to file containing custom instructions (takes precedence over `--instruction`) |
+
+At least one input is required: `--target`, `--input`, `--record-uuid`, `--source`, or piped stdin. Multiple inputs can be combined. `--source` requires `--target` for hostname filtering.
+
+### Swarm Phases
+
+```
+Phase 1: Normalize        → Parse input(s) into HttpRequestResponse objects, save to DB
+Phase 2: Source Analysis   → AI extracts routes, auth config, JS extensions from source (conditional, requires --source)
+Phase 3: Plan             → Master agent analyzes request, selects modules, generates extensions
+Phase 4: Extension        → Write generated JS extensions to temp directory
+Phase 5: Scan             → Dynamic assessment with selected modules + extensions
+Phase 6: Triage           → Agent reviews extension-generated findings
+Phase 7: Rescan           → Targeted rescan based on triage follow-ups (loop)
+```
+
+Phase 2 (Source Analysis) is **automatically skipped** when `--source` is not provided. The triage→rescan loop (phases 6-7) repeats until the agent sets verdict to `"done"`, there are no follow-ups, or `--max-iterations` is reached.
+
+### Swarm Output Schemas
+
+**SwarmPlan** (phase 3 output):
+
+The master agent produces a plan with three tiers of custom checks (lightest first):
+
+```json
+{
+  "module_tags": ["sqli", "injection"],
+  "module_ids": ["sqli-error-based"],
+  "quick_checks": [
+    {
+      "id": "ssti-jinja2",
+      "severity": "high",
+      "scan": "per_insertion_point",
+      "payloads": ["{{7*7}}", "${7*7}"],
+      "match": {"body_contains": "49"}
+    }
+  ],
+  "snippets": [
+    {
+      "id": "idor-check",
+      "severity": "high",
+      "scan": "per_request",
+      "body": "var related = vigolium.db.records.getRelated(ctx.record.uuid);\nvar cmp = vigolium.db.compareResponses(related);\nif (!cmp.all_similar) return [{url: ctx.request.url, matched: 'Response variance', name: 'Potential IDOR'}];\nreturn null;"
+    }
+  ],
+  "extensions": [
+    {
+      "filename": "custom-json-sqli.js",
+      "code": "module.exports = { id: 'custom-json-sqli', ... };",
+      "reason": "JSON body with user_id parameter susceptible to SQL injection"
+    }
+  ],
+  "focus_areas": ["SQL injection in JSON body parameters"],
+  "notes": "Target uses JSON API with direct DB queries"
+}
+```
+
+**Custom check tiers** (prefer the lightest format that works):
+
+| Tier | Format | When to use |
+|------|--------|-------------|
+| `quick_checks` | Declarative JSON (payloads + match) | Simple "send payload, check response" patterns — zero JS |
+| `snippets` | JS function body only | Need `vigolium.*` API access but no boilerplate |
+| `extensions` | Full JS module | Complex multi-step logic, multiple helpers, state management |
+
+**SwarmResult** (final output):
+
+```json
+{
+  "swarm_plan": { "..." },
+  "triage_results": [ "..." ],
+  "total_findings": 5,
+  "total_records": 3,
+  "severity_counts": {"critical": 1, "high": 2, "medium": 2, "low": 0},
+  "confirmed": 3,
+  "false_positives": 2,
+  "iterations": 2,
+  "duration": "3m45s",
+  "agent_run_uuid": "agt-...",
+  "session_id": "...",
+  "session_dir": "~/.vigolium/agent-sessions/agt-abc123"
+}
+```
+
+### Examples
+
+```bash
+# Target a URL
+vigolium agent swarm -t https://example.com/api/users
+
+# Analyze a curl command
+vigolium agent swarm --input "curl -X POST https://example.com/api/login -d '{\"user\":\"admin\"}'"
+
+# Pipe raw HTTP request from stdin
+echo -e "POST /api/search HTTP/1.1\r\nHost: example.com\r\n\r\nq=test" | vigolium agent swarm --input -
+
+# Scan a record from the database
+vigolium agent swarm --record-uuid 550e8400-e29b-41d4-a716-446655440000
+
+# Focus on a specific vulnerability type
+vigolium agent swarm -t https://example.com/api/users --vuln-type sqli
+
+# Source-aware swarm (discovers routes from source code)
+vigolium agent swarm -t http://localhost:3000 --source ~/projects/my-app
+
+# Source-aware with specific files
+vigolium agent swarm -t http://localhost:8080 --source ./backend \
+  --files src/routes/api.js,src/models/user.js
+
+# Source analysis only (extract routes, no scan)
+vigolium agent swarm -t http://localhost:3000 --source ./src --source-analysis-only
+
+# Custom instructions to guide the agent
+vigolium agent swarm -t https://example.com/api/users --instruction "Focus on GraphQL parsing"
+
+# Instructions from a file
+vigolium agent swarm -t https://example.com/api/users --instruction-file custom-hints.txt
+
+# Show rendered prompts during execution
+vigolium agent swarm -t https://example.com/api/users --show-prompt
+
+# Custom ACP agent command
+vigolium agent swarm -t https://example.com/api/users --agent-acp-cmd "traecli acp"
+
+# Specify modules explicitly
+vigolium agent swarm -t https://example.com/api/search -m xss-reflected,xss-stored
+
+# Control scanning phases
+vigolium agent swarm -t https://example.com --only audit
+vigolium agent swarm -t https://example.com --skip discovery,spidering
+
+# Preview master agent prompt
+vigolium agent swarm -t https://example.com/api/users --dry-run
+
+# With specific agent backend
+vigolium agent swarm -t https://example.com/api/users --agent claude
+
+# With custom timeout
+vigolium agent swarm -t https://example.com/api/users --timeout 30m --max-iterations 5
 ```
 
 ---
@@ -347,9 +533,13 @@ Templates use YAML frontmatter with fields like:
 **Pipeline:**
 - `pipeline-plan` — Phase 2 attack planning checkpoint
 - `pipeline-triage` — Phase 4 finding triage checkpoint
+- `pipeline-source-analysis` — Phase 0 source code analysis checkpoint
 
 **Autopilot:**
 - `autopilot-system` — System prompt for autonomous mode
+
+**Swarm:**
+- `agent-swarm-master` — Master agent prompt for swarm planning
 
 ---
 
@@ -433,8 +623,15 @@ Used by pipeline phase 2 (Plan). Contains:
 
 ### triage_result
 
-Used by pipeline phase 4 (Triage). Contains:
+Used by pipeline phase 4 (Triage) and swarm phase 5. Contains:
 - `confirmed` — validated findings with reasons
 - `false_positives` — dismissed findings with reasons
 - `follow_up_scans` — additional targets for rescan
 - `verdict` — `"done"` or `"rescan"` to control the loop
+
+### source_analysis
+
+Used by pipeline phase 0 (Source Analysis). Contains:
+- `http_records` — extracted routes as HTTP requests with method, URL, headers, body
+- `session_config` — login flow and auth configuration (sessions with extract rules)
+- `extensions` — custom JavaScript scanner extensions generated from identified sinks

@@ -6,7 +6,7 @@ Claude Code skill for operating the [Vigolium](https://github.com/vigolium/vigol
 
 Vigolium is a high-fidelity web vulnerability scanner built for security professionals. It combines traditional DAST scanning with AI-powered analysis to find vulnerabilities in web applications. Key capabilities:
 
-- **Multi-phase scanning** — discovery, spidering, SPA analysis, dynamic assessment, and SAST
+- **Multi-phase scanning** — discovery, spidering, SPA analysis, audit, and SAST
 - **Flexible input** — scan URLs directly, or import from OpenAPI specs, Burp exports, HAR files, cURL commands, and more
 - **AI agent modes** — autonomous scanning, multi-phase pipelines, and AI-assisted code review
 - **Extensible** — write custom scanner modules in JavaScript
@@ -16,7 +16,7 @@ Vigolium is a high-fidelity web vulnerability scanner built for security profess
 
 # Using the Vigolium Scanner Skill in Claude Code, Codex or any agents
 
-This guide explains how to install and use the `vigolium-scanner` skill with AI coding agents — Claude Code and OpenAI Codex — to operate the Vigolium CLI for web vulnerability scanning, security testing, and custom extension authoring.
+This guide explains how to install and use the `vigolium-scanner` skill (`skills/vigolium-scanner/`) with AI coding agents — Claude Code and OpenAI Codex — to operate the Vigolium CLI for web vulnerability scanning, security testing, and custom extension authoring.
 
 ## Table of Contents
 
@@ -49,8 +49,9 @@ The skill teaches the AI agent how to:
 2. **Construct correct flag combinations** with proper syntax
 3. **Follow scanning workflows** end-to-end (ingest → scan → triage → export)
 4. **Write custom JavaScript extensions** using the `vigolium.*` API
-5. **Operate AI agent modes** (query, autopilot, pipeline)
-6. **Manage data** — browse traffic, filter findings, export reports, clean databases
+5. **Execute ad-hoc JavaScript** with `vigolium js` for scripting and automation
+6. **Operate AI agent modes** (query, autopilot, pipeline, swarm)
+7. **Manage data** — browse traffic, filter findings, export reports, clean databases
 
 The skill uses lazy-loaded references: the main `SKILL.md` stays small, and detailed docs are loaded on demand when the agent needs deep flag information or extension authoring guidance.
 
@@ -59,14 +60,15 @@ The skill uses lazy-loaded references: the main `SKILL.md` stays small, and deta
 ## Skill Structure
 
 ```
-vigolium-scanner/
+skills/vigolium-scanner/
 ├── SKILL.md                              # Main skill (decision tree, recipes, flags)
 └── references/
     ├── scanning-commands.md              # scan, scan-url, scan-request, run
     ├── server-and-ingestion.md           # server, ingest, traffic, traffic replay
-    ├── agent-commands.md                 # agent, agent query, autopilot, pipeline
-    ├── data-and-management.md            # db, module, ext, config, scope, source, export
+    ├── agent-commands.md                 # agent, agent query, autopilot, pipeline, swarm
+    ├── data-and-management.md            # db, module, ext, js, config, scope, source, export
     ├── flags-reference.md                # Complete alphabetical flag index
+    ├── session-auth-config.md            # Auth config YAML format, extract rules
     └── writing-extensions.md             # JS extension API and examples
 ```
 
@@ -105,7 +107,7 @@ cp -R vigolium-scanner ~/.claude
 cp -R vigolium-scanner ~/.agents
 ```
 
-Once installed, the skill **auto-triggers** when you mention keywords like `scan`, `vigolium`, `agent autopilot`, `vulnerability scanner`, `openapi scan`, etc. In Claude Code, you can also invoke it explicitly with `/vigolium-cli`.
+Once installed, the skill **auto-triggers** when you mention keywords like `scan`, `vigolium`, `agent autopilot`, `vulnerability scanner`, `openapi scan`, etc. In Claude Code, you can also invoke it explicitly with `/vigolium-scanner`.
 
 ---
 
@@ -202,6 +204,14 @@ vigolium scan -t https://example.com --format jsonl -o results.jsonl
 ```
 ```bash
 vigolium scan -t https://example.com --format html -o report.html
+```
+
+**Scan with CI-friendly output (for CI/CD pipelines):**
+```
+> Scan and output only JSONL findings, no color or banners
+```
+```bash
+vigolium scan -t https://example.com --ci-output-format
 ```
 
 **Scan with custom scanning profile:**
@@ -328,14 +338,14 @@ vigolium scan -t https://example.com --only discovery
 vigolium run spidering -t https://example.com
 ```
 
-**Run only dynamic assessment (vulnerability scanning):**
+**Run only audit (vulnerability scanning):**
 ```
 > Skip discovery, just run the vulnerability modules
 ```
 ```bash
 vigolium run audit -t https://example.com
 # or
-vigolium scan -t https://example.com --only dynamic-assessment
+vigolium scan -t https://example.com --only audit
 ```
 
 **Run only SPA (security posture assessment via Nuclei):**
@@ -386,7 +396,7 @@ vigolium run ext -t https://example.com --ext ./custom-check.js
 |-------|-------------|
 | `deparos`, `discover` | `discovery` |
 | `spitolas` | `spidering` |
-| `audit` | `dynamic-assessment` |
+| `dynamic-assessment` | `audit` |
 | `ext` | `extension` |
 
 ---
@@ -822,6 +832,81 @@ vigolium agent pipeline -t https://example.com --repo ./src \
 vigolium agent pipeline -t https://example.com --agent gemini
 ```
 
+#### Agent Swarm (Targeted Single-Request)
+
+**Deep analysis of a single endpoint:**
+```
+> Deep scan the users API endpoint for vulnerabilities
+```
+```bash
+vigolium agent swarm -t https://example.com/api/users
+```
+
+**From a curl command:**
+```
+> Analyze this curl command for vulnerabilities
+```
+```bash
+vigolium agent swarm --input "curl -X POST https://example.com/api/login -d '{\"user\":\"admin\"}'"
+```
+
+**Pipe raw HTTP from stdin:**
+```
+> Scan this raw HTTP request
+```
+```bash
+echo -e "POST /api/search HTTP/1.1\r\nHost: example.com\r\n\r\nq=test" | vigolium agent swarm --input -
+```
+
+**Focus on a specific vulnerability:**
+```
+> Focus on SQL injection in the users endpoint
+```
+```bash
+vigolium agent swarm -t https://example.com/api/users --vuln-type sqli
+```
+
+**Source-aware swarm (discovers routes from source):**
+```
+> Scan my app with source code context
+```
+```bash
+vigolium agent swarm -t http://localhost:3000 --source ~/projects/my-app
+```
+
+**Source-aware with specific files:**
+```
+> Analyze only the API routes and user model
+```
+```bash
+vigolium agent swarm -t http://localhost:8080 --source ./backend \
+  --files src/routes/api.js,src/models/user.js
+```
+
+**Source analysis only (extract routes, no scan):**
+```
+> Just extract routes from my source code
+```
+```bash
+vigolium agent swarm -t http://localhost:3000 --source ./src --source-analysis-only
+```
+
+**Custom instructions:**
+```
+> Focus the agent on GraphQL parsing vulnerabilities
+```
+```bash
+vigolium agent swarm -t https://example.com/graphql --instruction "Focus on GraphQL parsing"
+```
+
+**Preview prompts:**
+```
+> Show me what the swarm agent would do
+```
+```bash
+vigolium agent swarm -t https://example.com/api/users --dry-run
+```
+
 ---
 
 ### 7. Traffic & Results Browsing
@@ -928,6 +1013,30 @@ vigolium finding
 ```
 ```bash
 vigolium finding --severity high,critical
+```
+
+**Filter findings by module type or source:**
+```
+> Show only active module findings from audit
+```
+```bash
+vigolium finding --module-type active --finding-source audit
+```
+
+**View a specific finding in Burp-style format:**
+```
+> Show finding #42 with full HTTP details
+```
+```bash
+vigolium finding --id 42 --burp
+```
+
+**Custom finding columns:**
+```
+> Show findings with tags and confidence
+```
+```bash
+vigolium finding --columns ID,SEVERITY,MODULE,MATCHED_AT,TAGS,CONFIDENCE
 ```
 
 **Search findings:**
@@ -1233,6 +1342,14 @@ vigolium run sast --repo /path/to/app
 vigolium run sast --repo /path/to/app --rule gin
 ```
 
+**SAST from a Git URL:**
+```
+> Clone a repo and run static analysis
+```
+```bash
+vigolium run sast --repo-url https://github.com/org/repo
+```
+
 ---
 
 ### 11. JavaScript Extensions
@@ -1371,6 +1488,30 @@ module.exports = {
 
 The agent will generate a JS file using `vigolium.agent.generatePayloads()` and `vigolium.agent.analyzeResponse()`.
 
+**Execute ad-hoc JavaScript with vigolium js:**
+```
+> Run a JS script that queries the database and flags high-risk records
+```
+```bash
+vigolium js --code 'var records = vigolium.db.records.query({ hostname: "example.com" }); records.forEach(function(r) { if (vigolium.utils.hasDynamicSegment(vigolium.parse.url(r.url).path)) vigolium.db.records.annotate(r.uuid, { risk_score: 50 }); })'
+```
+
+**Execute a JS file with target context:**
+```
+> Run my scanner script against example.com
+```
+```bash
+vigolium js --target https://example.com --code-file my-scanner.js
+```
+
+**Quick hash or encode from the terminal:**
+```
+> MD5 hash the string "password"
+```
+```bash
+vigolium js --format text --code 'vigolium.utils.md5("password")'
+```
+
 **YAML extension (simple pattern matching):**
 ```
 > Write a YAML extension that detects stack traces and SQL errors
@@ -1434,10 +1575,10 @@ vigolium config set scope.origin.mode strict
 
 **Enable extensions globally:**
 ```
-> Enable extensions in dynamic assessment
+> Enable extensions in audit
 ```
 ```bash
-vigolium config set dynamic_assessment.extensions.enabled true
+vigolium config set audit.extensions.enabled true
 ```
 
 **View scope rules:**
@@ -1499,7 +1640,13 @@ These are examples of natural language prompts you can give to Claude Code or Co
 | "Review my code for security issues" | `vigolium agent --prompt-template security-code-review --repo ./src` |
 | "Autonomous scan focused on injection" | `vigolium agent autopilot -t <url> --focus "injection"` |
 | "Run the full AI pipeline" | `vigolium agent pipeline -t <url>` |
+| "Deep scan this endpoint for SQLi" | `vigolium agent swarm -t <url> --vuln-type sqli` |
+| "Scan with source code context" | `vigolium agent swarm -t <url> --source ./src` |
+| "Run this JS script against the API" | `vigolium js --code-file script.js --target <url>` |
+| "MD5 hash this string" | `vigolium js --format text --code 'vigolium.utils.md5("...")'` |
 | "Show me all critical findings" | `vigolium finding --severity critical` |
+| "Show active module findings in Burp format" | `vigolium finding --module-type active --burp` |
+| "Run scan for CI/CD pipeline" | `vigolium scan -t <url> --ci-output-format` |
 | "Export results as HTML report" | `vigolium export --format html -o report.html` |
 | "What traffic is in the database?" | `vigolium traffic` |
 | "Write me an extension that checks for exposed .env files" | Generates a JS extension file |

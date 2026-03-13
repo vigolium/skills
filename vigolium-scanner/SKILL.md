@@ -13,10 +13,10 @@ metadata:
   domain: security-tooling
   triggers: >-
     vigolium, scan, scan-url, scan-request, run, ingest, server, agent, agent query,
-    agent autopilot, agent pipeline, traffic, db, module, extensions, export, strategy,
+    agent autopilot, agent pipeline, agent swarm, traffic, db, module, extensions, js, export, strategy,
     scope, source, config, project, vulnerability scanner, security scan, DAST,
-    dynamic assessment, openapi scan, burp import, HAR import, whitebox scanning, SAST,
-    javascript extension, custom scanner, module-tag, run extension
+    audit, openapi scan, burp import, HAR import, whitebox scanning, SAST,
+    javascript extension, custom scanner, module-tag, run extension, vigolium js
   role: operator
   scope: usage
   output-format: commands
@@ -31,8 +31,9 @@ Operator's guide for the vigolium high-fidelity web vulnerability scanner. Cover
 Vigolium is a CLI-first vulnerability scanner that operates in multiple modes:
 - **Standalone scanner**: `scan`, `scan-url`, `scan-request`, `run`
 - **REST API server with traffic ingestion**: `server`, `ingest`
-- **AI agent integration**: `agent` (template-based), `agent query` (inline prompt), `agent autopilot` (autonomous), `agent pipeline` (multi-phase)
+- **AI agent integration**: `agent` (template-based), `agent query` (inline prompt), `agent autopilot` (autonomous), `agent pipeline` (multi-phase), `agent swarm` (targeted single-request)
 - **Extension runner**: `run extension --ext custom-check.js` for custom JS scanning logic
+- **JavaScript executor**: `js` for ad-hoc scripting with full `vigolium.*` API access
 
 This skill helps you pick the right command, flags, and workflow for any security testing task.
 
@@ -53,19 +54,28 @@ Use this to find the right command quickly:
 | Ingest traffic into database without scanning | `vigolium ingest -t <url> -I openapi -i spec.yaml` |
 | Start the API server | `vigolium server` |
 | Start server and auto-scan new traffic | `vigolium server -t <url> -S` |
-| Run AI code review on source code | `vigolium agent --prompt-template security-code-review --repo ./src` |
+| Run AI code review on source code | `vigolium agent --prompt-template security-code-review --source ./src` |
 | Run AI agent with inline prompt | `vigolium agent query 'review this code for vulnerabilities'` |
 | Autonomous AI-driven scanning | `vigolium agent autopilot -t <url>` |
 | Multi-phase AI pipeline scan | `vigolium agent pipeline -t <url>` |
-| Pipeline with focus area and source | `vigolium agent pipeline -t <url> --focus "auth bypass" --repo ./src` |
+| Pipeline with focus area and source | `vigolium agent pipeline -t <url> --focus "auth bypass" --source ./src` |
+| Deep single-request vulnerability scan | `vigolium agent swarm -t <url>` |
+| Swarm with curl command input | `vigolium agent swarm --input "curl -X POST <url> -d '...'"` |
+| Swarm with source code (route discovery) | `vigolium agent swarm -t <url> --source ./src` |
+| Swarm with custom instructions | `vigolium agent swarm -t <url> --instruction "Focus on GraphQL"` |
+| Source analysis only (no scan) | `vigolium agent swarm -t <url> --source ./src --source-analysis-only` |
 | Browse stored HTTP traffic | `vigolium traffic` or `vigolium traffic <search>` |
 | Browse findings/vulnerabilities | `vigolium finding` or `vigolium db ls --table findings` |
+| Filter findings by module type or source | `vigolium finding --module-type active --finding-source audit` |
 | View database statistics | `vigolium db stats` |
 | Export results to JSONL/HTML | `vigolium export --format jsonl -o results.jsonl` |
 | Clean database records | `vigolium db clean --host <hostname>` |
 | List available scanner modules | `vigolium module ls` or `vigolium scan -M` |
 | Enable/disable specific modules | `vigolium module enable xss` / `module disable sqli` |
 | Manage JavaScript extensions | `vigolium ext ls` / `ext docs` / `ext preset` |
+| Execute arbitrary JS with vigolium API | `vigolium js --code 'vigolium.http.get("https://example.com")'` |
+| Execute JS from a file | `vigolium js --code-file script.js` |
+| Execute JS from stdin | `echo 'vigolium.utils.md5("test")' \| vigolium js` |
 | View/modify configuration | `vigolium config ls` / `config set <key> <value>` |
 | View scanning strategies | `vigolium strategy` |
 | Manage scope rules | `vigolium scope view` |
@@ -81,8 +91,9 @@ Load detailed reference based on what you need:
 |-------|-----------|-----------|
 | Scanning commands | `references/scanning-commands.md` | scan, scan-url, scan-request, run flags and options |
 | Server & ingestion | `references/server-and-ingestion.md` | server, ingest, traffic command flags |
-| Agent commands | `references/agent-commands.md` | agent, agent query, agent autopilot, agent pipeline flags and templates |
-| Data & management | `references/data-and-management.md` | db, module, extensions, config, scope, source, strategy, export, project |
+| Agent commands | `references/agent-commands.md` | agent, agent query, agent autopilot, agent pipeline, agent swarm flags and templates |
+| Session / auth config | `references/session-auth-config.md` | --auth-config YAML format, extract rules, authenticated scanning setup |
+| Data & management | `references/data-and-management.md` | db, module, extensions, js, config, scope, source, strategy, export, project |
 | Complete flag index | `references/flags-reference.md` | Looking up any specific flag by name |
 | Writing extensions | `references/writing-extensions.md` | Creating custom JS scanner modules, extension API |
 
@@ -113,7 +124,7 @@ Vigolium runs up to 8 phases. Use `--only <phase>` to isolate one, or `--skip <p
 | `spidering` | `spitolas` | Headless browser crawling for JS-driven routes and dynamic content |
 | `spa` | — | Security posture assessment via Nuclei templates |
 | `sast` | — | Static analysis on linked source code (requires `--source`) |
-| `dynamic-assessment` | `audit` | Core vulnerability scanning with active and passive modules |
+| `audit` | — | Core vulnerability scanning with active and passive modules |
 | `extension` | `ext` | Run only JavaScript extension modules (enables extensions, skips built-in modules) |
 
 - `--only` and `--skip` are **mutually exclusive**
@@ -261,10 +272,10 @@ vigolium ingest -t https://example.com -I openapi -i spec.yaml -S
 ### 11. AI Agent Code Review
 ```bash
 # Security code review
-vigolium agent --prompt-template security-code-review --repo ./src
+vigolium agent --prompt-template security-code-review --source ./src
 
 # Endpoint discovery from source
-vigolium agent --prompt-template endpoint-discovery --repo ./src
+vigolium agent --prompt-template endpoint-discovery --source ./src
 
 # List available templates
 vigolium agent --list-templates
@@ -282,7 +293,7 @@ vigolium agent query --agent claude --prompt-file custom-prompt.md
 vigolium agent autopilot -t https://example.com
 
 # With source code context and focus area
-vigolium agent autopilot -t https://api.example.com --repo ./src --focus "auth bypass"
+vigolium agent autopilot -t https://api.example.com --source ./src --focus "auth bypass"
 
 # Custom limits
 vigolium agent autopilot -t https://example.com --max-commands 50 --timeout 15m
@@ -293,11 +304,11 @@ vigolium agent autopilot -t https://example.com --dry-run
 
 ### 13. AI Agent Pipeline (Multi-Phase)
 ```bash
-# Basic pipeline scan (discover → plan → scan → triage → rescan → report)
+# Basic pipeline scan (source-analysis → discover → plan → scan → triage → rescan → report)
 vigolium agent pipeline -t https://example.com
 
-# With focus and source code
-vigolium agent pipeline -t https://example.com --focus "SQL injection" --repo ./src
+# With focus and source code (enables Phase 0: source analysis)
+vigolium agent pipeline -t https://example.com --focus "SQL injection" --source ./src
 
 # Control rescan iterations
 vigolium agent pipeline -t https://example.com --max-rescan-rounds 3
@@ -312,7 +323,57 @@ vigolium agent pipeline -t https://example.com --profile deep
 vigolium agent pipeline -t https://example.com --dry-run
 ```
 
-### 14. Results Inspection
+### 14. AI Agent Swarm (Targeted Single-Request)
+```bash
+# Target a URL for deep analysis
+vigolium agent swarm -t https://example.com/api/users
+
+# Analyze a curl command
+vigolium agent swarm --input "curl -X POST https://example.com/api/login -d '{\"user\":\"admin\"}'"
+
+# Pipe raw HTTP request from stdin
+echo -e "POST /api/search HTTP/1.1\r\nHost: example.com\r\n\r\nq=test" | vigolium agent swarm --input -
+
+# Scan a record from the database
+vigolium agent swarm --record-uuid 550e8400-e29b-41d4-a716-446655440000
+
+# Focus on a specific vulnerability type
+vigolium agent swarm -t https://example.com/api/users --vuln-type sqli
+
+# Source-aware swarm (discovers routes from source code)
+vigolium agent swarm -t http://localhost:3000 --source ./src
+
+# Source-aware with specific files
+vigolium agent swarm -t http://localhost:8080 --source ./backend \
+  --files src/routes/api.js,src/models/user.js
+
+# Source analysis only (extract routes, no scan)
+vigolium agent swarm -t http://localhost:3000 --source ./src --source-analysis-only
+
+# Custom instructions to guide the agent
+vigolium agent swarm -t https://example.com/api/users --instruction "Focus on GraphQL parsing"
+
+# Instructions from a file
+vigolium agent swarm -t https://example.com/api/users --instruction-file hints.txt
+
+# Custom ACP agent command
+vigolium agent swarm -t https://example.com/api/users --agent-acp-cmd "traecli acp"
+
+# Specify modules explicitly
+vigolium agent swarm -t https://example.com/api/search -m xss-reflected,xss-stored
+
+# Control scanning phases
+vigolium agent swarm -t https://example.com --only audit
+vigolium agent swarm -t https://example.com --skip discovery,spidering
+
+# Preview master agent prompt
+vigolium agent swarm -t https://example.com/api/users --dry-run
+
+# Show rendered prompts during execution
+vigolium agent swarm -t https://example.com/api/users --show-prompt
+```
+
+### 15. Results Inspection
 ```bash
 # Browse HTTP traffic
 vigolium traffic
@@ -324,6 +385,11 @@ vigolium traffic --host api.example.com --method POST
 # Browse findings
 vigolium finding
 vigolium finding --severity high,critical
+vigolium finding --module-type active
+vigolium finding --finding-source audit
+vigolium finding --burp         # Burp-style format
+vigolium finding --id 42        # specific finding by ID
+vigolium finding --columns ID,SEVERITY,MODULE,MATCHED_AT,TAGS
 vigolium db ls --table findings --severity critical
 
 # Database stats
@@ -335,7 +401,7 @@ vigolium traffic --watch 5s
 vigolium db stats --watch 10
 ```
 
-### 15. Export and Reports
+### 16. Export and Reports
 ```bash
 # Full JSONL export
 vigolium export --format jsonl -o full-export.jsonl
@@ -353,7 +419,7 @@ vigolium db export -f markdown -o report.md
 vigolium db export --host example.com --from 2024-01-01
 ```
 
-### 16. Whitebox Scanning (Source-Aware)
+### 17. Whitebox Scanning (Source-Aware)
 ```bash
 # Link source code and scan
 vigolium scan -t https://example.com --source ./src --strategy whitebox
@@ -366,11 +432,14 @@ vigolium source add --hostname example.com --path ./src
 vigolium scan -t https://example.com --strategy whitebox
 
 # SAST-only phase
-vigolium run sast --repo /path/to/app
-vigolium run sast --repo /path/to/app --rule gin
+vigolium run sast --sast-adhoc /path/to/app
+vigolium run sast --sast-adhoc /path/to/app --rule gin
+
+# SAST from git URL (clones automatically)
+vigolium run sast --sast-adhoc https://github.com/org/repo
 ```
 
-### 17. Configuration Tuning
+### 18. Configuration Tuning
 ```bash
 # View all config
 vigolium config ls
@@ -382,7 +451,7 @@ vigolium config ls scanning_pace
 # Set values
 vigolium config set scanning_strategy.default_strategy deep
 vigolium config set scope.origin.mode strict
-vigolium config set dynamic_assessment.extensions.enabled true
+vigolium config set audit.extensions.enabled true
 
 # Speed tuning
 vigolium scan -t https://example.com -c 100 --rate-limit 200 --max-per-host 5
@@ -394,7 +463,7 @@ vigolium scan -t https://example.com --scope-origin strict
 vigolium scan -t https://example.com --scanning-profile aggressive
 ```
 
-### 18. Project Management
+### 19. Project Management
 ```bash
 # Create a project
 vigolium project create my-project
@@ -412,7 +481,7 @@ vigolium scan -t https://example.com --project-name my-project
 VIGOLIUM_PROJECT=my-project vigolium db stats
 ```
 
-### 19. Writing and Running Custom Extensions
+### 20. Writing and Running Custom Extensions
 ```bash
 # Install preset examples
 vigolium ext preset
@@ -433,6 +502,39 @@ vigolium scan -t https://example.com --ext custom-check.js
 
 # Run only extensions, skip built-in modules
 vigolium scan -t https://example.com --only extension --ext custom-check.js
+```
+
+### 21. JavaScript Execution (vigolium js)
+```bash
+# Execute inline JS with full vigolium.* API access
+vigolium js --code 'vigolium.http.get("https://example.com/api/health")'
+
+# Execute JS from a file
+vigolium js --code-file scanner-script.js
+
+# TypeScript auto-transpilation
+vigolium js --code-file scanner.ts
+
+# From stdin (ideal for agent/pipe workflows)
+echo 'vigolium.utils.md5("password123")' | vigolium js
+
+# With target context (accessible as TARGET variable)
+vigolium js --target https://example.com --code 'vigolium.http.get(TARGET + "/api/users")'
+
+# Custom timeout and text output format
+vigolium js --timeout 60s --format text --code 'vigolium.utils.sha256("hello")'
+
+# Complex scripting: ingest, query, and annotate
+vigolium js --code-file <<'EOF' > /dev/null
+var records = vigolium.db.records.query({ hostname: "example.com", limit: 10 });
+for (var i = 0; i < records.length; i++) {
+  var parsed = vigolium.parse.url(records[i].url);
+  if (vigolium.utils.hasDynamicSegment(parsed.path)) {
+    vigolium.db.records.annotate(records[i].uuid, { risk_score: 50 });
+    vigolium.log.info("Flagged: " + records[i].url);
+  }
+}
+EOF
 ```
 
 ## Key Global Flags
@@ -467,6 +569,7 @@ These flags are available on all commands (persistent flags on root):
 | `--verbose` | `-v` | `false` | Verbose logging |
 | `--silent` | — | `false` | Suppress all output except findings |
 | `--json` | `-j` | `false` | Format output as JSONL (one JSON object per line) |
+| `--ci-output-format` | — | `false` | CI-friendly output: JSONL findings only, no color, no banners |
 | `--debug` | — | `false` | Dump raw HTTP traffic |
 | `--db` | — | `~/.vigolium/database-vgnm.sqlite` | SQLite database path |
 | `--config` | — | `~/.vigolium/vigolium-configs.yaml` | Config file path |
@@ -483,12 +586,14 @@ These flags are available on all commands (persistent flags on root):
 - `--format html` requires `-o/--output` and is only supported for discovery/spidering phases (in scan mode)
 - `--target/-t` and `--spec-url` are mutually exclusive for ingest
 - `--source` and `--source-url` are mutually exclusive
+- `--repo` is deprecated — use `--source` for agent modes and `--sast-adhoc` for ad-hoc SAST scans
+- `--ci-output-format` sets JSONL output, suppresses banners and color (implies `--json --silent`)
 - Server mode requires API key auth by default (use `--no-auth` to disable, or set `VIGOLIUM_API_KEY`)
 - Agent commands require agent backends configured in `vigolium-configs.yaml`
 - `--scan-on-receive/-S` is ignored in remote ingest mode (server handles scanning)
 - `db clean --all` requires `--force` for safety
 - `db clean --force` with no filter flags resets the entire database (SQLite only)
 - Whitebox/SAST phases require `--source <path>` or `--source-url <git-url>` to link application source code
-- Phase aliases: `deparos`/`discover` = `discovery`, `spitolas` = `spidering`, `audit` = `dynamic-assessment`, `ext` = `extension`
+- Phase aliases: `deparos`/`discover` = `discovery`, `spitolas` = `spidering`, `ext` = `extension`. The legacy alias `dynamic-assessment` is accepted for `audit`
 - `--module-tag` uses OR logic: modules matching any specified tag are included
 - `-m` and `--module-tag` merge results (union)

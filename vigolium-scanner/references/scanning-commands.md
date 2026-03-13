@@ -73,7 +73,7 @@ Run a full vulnerability scan pipeline. Supports multiple targets, input formats
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--rule` | string | — | Filter SAST rules by fuzzy name match |
-| `--repo` | string | — | Local repo path for ad-hoc SAST scan (results not saved to database) |
+| `--sast-adhoc` | string | — | Ad-hoc SAST scan: local path or git URL (auto-detected, results not saved to database) |
 
 ### OAST flags (scan & run)
 
@@ -97,7 +97,7 @@ vigolium scan -T targets.txt
 vigolium scan -t https://example.com --strategy deep
 
 # Phase isolation
-vigolium scan -t https://example.com --only dynamic-assessment
+vigolium scan -t https://example.com --only audit
 vigolium scan -t https://example.com --only ext --ext ./custom-check.js
 vigolium scan -t https://example.com --skip discovery,spidering
 
@@ -244,7 +244,7 @@ Run a single scan phase directly. Equivalent to `vigolium scan --only <phase>`.
 | `spidering` | `spitolas` |
 | `spa` | — |
 | `sast` | — |
-| `dynamic-assessment` | `audit` |
+| `audit` | — |
 | `extension` | `ext` |
 
 The `run` command accepts the same flags as `scan` (output, discovery, spidering, SPA, SAST, OAST flags).
@@ -254,13 +254,13 @@ The `run` command accepts the same flags as `scan` (output, discovery, spidering
 ```bash
 vigolium run discover -t https://example.com
 vigolium run spidering -t https://example.com
-vigolium run dynamic-assessment -t https://example.com
-vigolium run dynamic-assessment -t https://example.com --module-tag spring
+vigolium run audit -t https://example.com
+vigolium run audit -t https://example.com --module-tag spring
 vigolium run external-harvest -t https://example.com
 vigolium run spa -t https://example.com
 vigolium run spa -t https://example.com --spa-tags cve --spa-severities critical,high
-vigolium run sast --repo /path/to/app
-vigolium run sast --repo /path/to/app --rule gin
+vigolium run sast --sast-adhoc /path/to/app
+vigolium run sast --sast-adhoc /path/to/app --rule gin
 vigolium run extension -t https://example.com --ext custom-check.js
 vigolium run ext -t https://example.com --ext ./my-scanner.js
 vigolium run deparos -t https://example.com
@@ -296,8 +296,19 @@ Speed settings have a layered precedence:
 3. Config `scanning_pace` section — per-phase max_duration and duration_factor
 4. Built-in defaults — lowest
 
+### CI Output
+
+- `--ci-output-format` enables CI-friendly output: JSONL findings only, no color, no banners
+- Equivalent to combining `--format jsonl --silent`
+- Useful for CI/CD pipelines that parse JSON output
+
 ### HTML Format Constraints
 
 - `--format html` requires `-o/--output`
 - In `scan` mode with `--only`, HTML is only supported for `discovery` and `spidering` phases
 - The `export` command supports HTML for all data
+
+### SAST Constraints
+
+- `--sast-adhoc` accepts either a local path or a git URL (auto-detected)
+- Git URLs are cloned to a temp directory automatically
