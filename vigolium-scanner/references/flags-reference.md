@@ -19,6 +19,7 @@ Alphabetical index of all vigolium CLI flags across all commands.
 - [Finding Flags](#finding-flags)
 - [Traffic Flags](#traffic-flags)
 - [DB Flags](#db-flags)
+- [Storage Flags](#storage-flags)
 - [Export Flags](#export-flags)
 - [Module Flags](#module-flags)
 - [Extensions Flags](#extensions-flags)
@@ -208,7 +209,11 @@ Flags specific to `vigolium agent` (parent command supports `--list-templates` a
 
 ## Agent Query Flags
 
-Flags specific to `vigolium agent query`.
+---
+
+## Agent Query Flags
+
+Flags specific to `vigolium agent query`. Also accepts the [shared olium provider override flags](#olium-provider-override-flags-shared).
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
@@ -233,7 +238,7 @@ Flags specific to `vigolium agent query`.
 
 ## Agent Autopilot Flags
 
-Flags specific to `vigolium agent autopilot`.
+Flags specific to `vigolium agent autopilot`. Also accepts a positional natural-language prompt and the [shared olium provider override flags](#olium-provider-override-flags-shared).
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
@@ -257,7 +262,7 @@ Flags specific to `vigolium agent autopilot`.
 
 ---
 
-## Agent Pipeline Flags
+## Agent Swarm Flags
 
 Flags specific to `vigolium agent pipeline` (backward-compatible alias for `vigolium agent swarm --discover`).
 
@@ -502,6 +507,52 @@ DB stats flags.
 | `--detailed` | bool | `false` | Show per-host and per-module breakdown |
 | `--host` | string | — | Filter hostname |
 | `--scan-id` | string | — | Filter scan ID |
+
+---
+
+## Storage Flags
+
+Flags for the `vigolium storage <subcommand>` family. All require `storage.enabled: true` in `vigolium-configs.yaml` (or `VIGOLIUM_STORAGE_ENABLED=true`) plus driver/bucket/access-key/secret-key configured. Operations are scoped to the active project.
+
+### storage ls
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--prefix` | string | — | Limit results to keys under this prefix |
+| `--tree` | bool | `false` | Render objects as a directory tree |
+| `--json` | bool | `false` | Output as JSON |
+
+### storage upload
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--key` | string | `ugc/<basename>` | Object key |
+| `--content-type` | string | — | Content-Type to set on the object |
+
+### storage download
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--output` | `-o` | string | — | Write to this file instead of stdout |
+
+### storage results
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--output` | `-o` | string | `results-<uuid>.tar.gz` | Write to this file |
+
+### storage presign
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--key` | string | — | Object key (required) |
+| `--method` | string | `GET` | HTTP method: `GET` or `PUT` |
+| `--expiry` | duration | `1h` | URL validity duration |
+| `--json` | bool | `false` | Output as JSON `{url, key, method, expiry_seconds}` |
+
+### storage rm
+
+Takes one or more `<key>` positional args. Honors the global `--force` / `-F` to skip the typed-`yes` confirmation.
 
 ---
 

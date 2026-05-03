@@ -24,7 +24,7 @@ metadata:
 
 # Vigolium CLI
 
-Operator's guide for the vigolium high-fidelity web vulnerability scanner. Covers every command, flag, workflow pattern, scanning strategy, AI agent modes, and JavaScript extension authoring.
+Operator's guide for the [Vigolium](https://www.vigolium.com/) high-fidelity web vulnerability scanner. Covers every command, flag, workflow pattern, scanning strategy, AI agent modes, and JavaScript extension authoring. Full documentation at [docs.vigolium.com](https://docs.vigolium.com/).
 
 ## Role Definition
 
@@ -284,7 +284,7 @@ vigolium server -t https://example.com --scan-on-receive
 vigolium ingest -t https://example.com -I openapi -i spec.yaml -S
 ```
 
-### 11. AI Agent Code Review
+### 11. AI Agent Code Review (agent query)
 ```bash
 # Security code review (uses SDK protocol by default — full tool access)
 vigolium agent --prompt-template security-code-review --source ./src
@@ -292,13 +292,17 @@ vigolium agent --prompt-template security-code-review --source ./src
 # Endpoint discovery from source
 vigolium agent --prompt-template endpoint-discovery --source ./src
 
-# List available templates
+# List available templates / backends (parent command helpers)
 vigolium agent --list-templates
+vigolium agent --list-agents
 
 # Custom prompt with inline text
 vigolium agent query 'review this code for vulnerabilities'
 
-# Custom prompt file
+# Pipe a prompt from stdin
+echo "check for SSRF in the URL-fetching handler" | vigolium agent query --stdin
+
+# Custom prompt file with a specific backend
 vigolium agent query --agent claude --prompt-file custom-prompt.md
 
 # With custom instruction
@@ -307,6 +311,19 @@ vigolium agent --prompt-template security-code-review --source ./src \
 ```
 
 ### 12. AI Agent Autopilot (Autonomous Scanning)
+
+Autopilot runs a single autonomous operator session that drives the vigolium CLI (Read/Grep/Glob/Bash/Edit/Write tools via the in-process olium engine). When `--source` is set, an audit harness runs first and the prepared whitebox context is fed to the operator.
+
+**Audit-harness auto-pick:** when neither `--archon` nor `--piolium` is set, autopilot picks **piolium** if `pi` + the piolium extension are installed, otherwise falls back to **archon** at its lite default. Pass `--piolium <mode>` to force piolium (auto-disables archon for the run); pass `--archon=off` to disable both.
+
+Intensity presets (`--intensity`) bundle limits, archon mode, and browser into a single flag. Explicit flags always override.
+
+| Preset | Max Commands | Timeout | Archon Mode | Browser |
+|--------|-------------:|--------:|-------------|:-------:|
+| `quick` | 30 | 1h | `lite` | off |
+| `balanced` (default) | 100 | 6h | `balanced` (6-phase) | off |
+| `deep` | 300 | 12h | `deep` (10-phase) | on |
+
 ```bash
 # Basic autonomous scan (SDK protocol — full coding agent tools)
 vigolium agent autopilot -t https://example.com
@@ -317,7 +334,26 @@ vigolium agent autopilot -t https://api.example.com --source ./src --focus "auth
 # With specialist pipeline (parallel vulnerability-class analysis)
 vigolium agent autopilot -t https://example.com --specialists injection,xss,auth
 
-# Custom limits
+# With source code context (triggers archon-audit automatically)
+vigolium agent autopilot -t https://example.com --source ./src
+
+# Specific files + custom instruction
+vigolium agent autopilot -t https://example.com --source ./src \
+  --files "routes/api.js,controllers/auth.js" \
+  --instruction "Focus on the new payment endpoint"
+
+# Intensity presets
+vigolium agent autopilot -t https://example.com --source ./src --intensity quick  # CI/PR
+vigolium agent autopilot -t https://example.com --intensity deep                   # full pentest
+
+# Override a specific setting within a preset
+vigolium agent autopilot -t https://example.com --intensity deep --timeout 4h
+
+# Scan only a PR diff or recent commits
+vigolium agent autopilot -t https://example.com --source ./src --diff main...feature-branch
+vigolium agent autopilot -t https://example.com --source ./src --last-commits 3
+
+# Custom limits (explicit override)
 vigolium agent autopilot -t https://example.com --max-commands 50 --timeout 15m
 
 # Pipe a curl command (target auto-derived)
@@ -418,17 +454,104 @@ vigolium agent pipeline -t https://example.com
 # With focus and source code
 vigolium agent pipeline -t https://example.com --focus "SQL injection" --source ./src
 
-# Control rescan iterations
-vigolium agent pipeline -t https://example.com --max-rescan-rounds 3
+# Full-scope scan with discovery
+vigolium agent swarm -t https://example.com --discover
 
 # Skip discovery and start from planning
 vigolium agent pipeline -t https://example.com --skip-phase discover --start-from plan
 
-# Use a scanning profile
-vigolium agent pipeline -t https://example.com --profile deep
+# Pipe raw HTTP request from stdin (auto-detected)
+echo -e "POST /api/search HTTP/1.1\r\nHost: example.com\r\n\r\nq=test" | vigolium agent swarm
 
-# Preview agent prompts
-vigolium agent pipeline -t https://example.com --dry-run
+# Scan a record from the database
+vigolium agent swarm --record-uuid 550e8400-e29b-41d4-a716-446655440000
+
+# Focus on a specific vulnerability type
+vigolium agent swarm -t https://example.com/api/users --vuln-type sqli
+
+# Source-aware swarm (route extraction + code audit + SAST + scanning)
+vigolium agent swarm -t http://localhost:3000 --source ./src
+
+# Full-scope source-aware scan
+vigolium agent swarm -t http://localhost:3000 --source ~/projects/express-app --discover
+
+# Source-aware with specific files
+vigolium agent swarm -t http://localhost:8080 --source ./backend \
+  --files src/routes/api.js,src/models/user.js
+
+# Source analysis only (extract routes, no scan)
+vigolium agent swarm -t http://localhost:3000 --source ./src --source-analysis-only
+
+# Intensity presets
+vigolium agent swarm -t https://example.com/api/users?id=1 --intensity quick
+vigolium agent swarm -t https://example.com --source ./src --intensity deep
+
+# Override a specific setting within a preset
+vigolium agent swarm -t https://example.com --intensity deep --triage=false
+
+# Run a background archon-audit in parallel (requires --source). Bare --archon = lite.
+vigolium agent swarm -t http://localhost:3000 --source ./src --archon
+vigolium agent swarm -t http://localhost:3000 --source ./src --archon deep
+
+# Or run piolium as the background audit harness (Pi runtime; requires --source)
+vigolium agent swarm -t http://localhost:3000 --source ./src --piolium balanced
+
+# Pull HTTP records from the active project as input
+vigolium agent swarm --all-records
+vigolium agent swarm --records-from "host=example.com,status=200,method=GET,path=/api,since=2026-04-01"
+vigolium agent swarm --record-uuid 550e8400-...,7c9b1a2d-...   # repeatable / comma-separated
+
+# Force the extension agent to run even when the planner picks built-in modules
+vigolium agent swarm -t https://example.com/api --with-extensions
+
+# Tune master-agent batching and probing
+vigolium agent swarm --all-records --master-batch-size 10 --batch-concurrency 4 \
+  --probe-concurrency 20 --probe-timeout 15s --max-plan-records 25
+
+# Scan only changed code
+vigolium agent swarm -t https://example.com --source ./src --diff main...feature-branch
+vigolium agent swarm -t https://example.com --source ./src --last-commits 3
+
+# Skip SAST tools during source analysis
+vigolium agent swarm -t http://localhost:3000 --source ./src --skip-sast
+
+# Disable code audit (still runs source analysis + SAST)
+vigolium agent swarm -t http://localhost:3000 --source ./src --code-audit=false
+
+# Enable triage and rescan loop
+vigolium agent swarm -t https://example.com/api/users --triage --max-iterations 5
+
+# Browser automation + auth capture
+vigolium agent swarm -t https://example.com --browser --browser-auth \
+  --credentials "username=admin,password=secret"
+
+# Upload results to cloud storage
+vigolium agent swarm -t https://example.com --source ./src --upload-results
+
+# Custom instructions to guide the agent
+vigolium agent swarm -t https://example.com/api/users --instruction "Focus on GraphQL parsing"
+
+# Instructions from a file
+vigolium agent swarm -t https://example.com/api/users --instruction-file hints.txt
+
+# Resume from a specific phase
+vigolium agent swarm -t https://example.com --start-from plan
+
+# Specify modules explicitly
+vigolium agent swarm -t https://example.com/api/search -m xss-reflected,xss-stored
+
+# Control scanning phases
+vigolium agent swarm -t https://example.com --only dynamic-assessment
+vigolium agent swarm -t https://example.com --skip discovery,spidering
+
+# Custom overall duration
+vigolium agent swarm -t https://example.com --max-duration 24h
+
+# Preview master agent prompt (no execution)
+vigolium agent swarm -t https://example.com/api/users --dry-run
+
+# Show rendered prompts during execution
+vigolium agent swarm -t https://example.com/api/users --show-prompt
 ```
 
 ### 15. Results Inspection
@@ -608,14 +731,22 @@ These flags are available on all commands (persistent flags on root):
 | `--target-file` | `-T` | — | File containing target URLs |
 | `--input` | `-i` | `-` (stdin) | Input file path |
 | `--input-mode` | `-I` | `urls` | Input format (openapi, burp, curl, har, etc.) |
+| `--input-read-timeout` | — | `3m` | Timeout for reading input from stdin or file |
 | `--concurrency` | `-c` | `50` | Concurrent scan workers |
 | `--rate-limit` | `-r` | `100` | Max requests per second |
-| `--max-per-host` | — | `2` | Max concurrent requests per host |
+| `--max-per-host` | — | `30` | Max concurrent requests per host |
+| `--max-host-error` | — | `30` | Skip host after this many consecutive errors |
+| `--max-findings-per-module` | — | `10` | Stop reporting after N findings per module (0 = unlimited) |
 | `--timeout` | — | `15s` | HTTP request timeout |
+| `--scanning-max-duration` | — | — | Maximum total scan duration (e.g. 1h, 30m) |
 | `--proxy` | — | — | HTTP/SOCKS5 proxy URL |
-| `--modules` | `-m` | `all` | Scanner modules to enable |
+| `--modules` | `-m` | `all` | Scanner modules to enable (fuzzy match on ID/name) |
 | `--module-tag` | — | — | Filter modules by tag (OR condition, repeatable) |
-| `--strategy` | — | — | Scanning strategy preset |
+| `--strategy` | — | — | Scanning strategy preset (lite, balanced, deep, whitebox) |
+| `--scanning-profile` | — | — | Scanning profile name or YAML file path |
+| `--intensity` | — | — | Scan intensity preset: `quick`, `balanced`, `deep` (maps to profile + strategy) |
+| `--heuristics-check` | — | `basic` | Pre-scan heuristics level: `none`, `basic`, `advanced` |
+| `--skip-heuristics` | — | `false` | Disable pre-scan heuristics (same as `--heuristics-check=none`) |
 | `--only` | — | — | Run only a single phase |
 | `--skip` | — | — | Skip specific phases |
 | `--format` | — | `console` | Output format: console, jsonl, html (comma-separated for multiple) |
@@ -632,14 +763,58 @@ These flags are available on all commands (persistent flags on root):
 | `--json` | `-j` | `false` | Format output as JSONL (one JSON object per line) |
 | `--ci-output-format` | — | `false` | CI-friendly output: JSONL findings only, no color, no banners |
 | `--debug` | — | `false` | Dump raw HTTP traffic |
+| `--dump-traffic` | — | `false` | Print every HTTP request/response pair to stderr (Burp-style) |
+| `--log-file` | — | — | Write all log output to this file (JSON format) |
 | `--db` | — | `~/.vigolium/database-vgnm.sqlite` | SQLite database path |
 | `--config` | — | `~/.vigolium/vigolium-configs.yaml` | Config file path |
+| `--stateless` | — | `false` | Use a temporary database, export results to `--output`, then discard |
+| `--no-clustering` | — | `false` | Disable de-duplication of identical concurrent HTTP requests |
 | `--force` | `-F` | `false` | Skip confirmation prompts |
 | `--list-modules` | `-M` | `false` | List all scanner modules |
 | `--watch` | — | — | Re-run on interval (e.g. 10s, 1m, 5m) |
 | `--width` | — | `70` | Max column width for tables |
 | `--ext` | — | — | Load JavaScript extension script (repeatable) |
 | `--ext-dir` | — | — | Override extension scripts directory |
+| `--full-example` | — | `false` | Show full example commands organized by section |
+
+## Scan-Specific Flags
+
+These flags apply to `scan`, `scan-url`, `scan-request`, and `run` commands:
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--output` | `-o` | — | Write findings / reports to this file path |
+| `--stats` | — | `false` | Show live progress stats during scanning |
+| `--include-response` | — | `false` | Include full HTTP response body in output |
+| `--retries` | — | `1` | Number of retry attempts for failed requests |
+| `--stream` | — | `false` | Process targets as a stream without buffering or deduplication |
+| `--header` | `-H` | — | Add custom HTTP header (repeatable, e.g. `-H 'Auth: Bearer tok'`) |
+| `--advanced-options` | `-a` | — | Module-specific options as key=value (e.g. `-a xss.dom=true`) |
+| `--required-only` | — | `false` | Parse only required fields from input format (ignore optional) |
+| `--skip-format-validation` | — | `false` | Skip validation of input file format |
+| `--upload-results` | — | `false` | Upload scan results to cloud storage after completion (requires storage config) |
+| `--stateless` | — | `false` | Use a temporary database, export to `--output`, then discard |
+| `--auth-file` | — | — | Path to auth file (YAML/JSON: single session or `sessions:` bundle), or bare name resolved against `scanning_strategy.session.session_dir`. Repeatable. |
+| `--auth` | — | — | Inline session in `name:Header:value` format. Repeatable. |
+| `--oast-url` | — | — | Fixed out-of-band callback URL |
+| `--discover` | — | `false` | Enable content discovery phase before scanning |
+| `--discover-max-time` | — | `1h` | Max time for content discovery per target |
+| `--fuzz-wordlist` | — | — | Custom fuzz wordlist path (enables fuzzing during discovery) |
+| `--no-prefix-breaker` | — | `false` | Disable per-prefix circuit breaker that stops trap-directory recursion |
+| `--spider` | — | `false` | Enable browser-based spidering phase before scanning |
+| `--spider-max-time` | — | `30m` | Max time for spidering per target |
+| `--browser-engine` | `-E` | `chromium` | Browser engine: `chromium`, `ungoogled`, `fingerprint` |
+| `--browsers` | `-b` | `1` | Number of parallel browser instances for spidering |
+| `--headless` | — | `true` | Run browser in headless mode |
+| `--no-cdp` | — | `false` | Disable Chrome DevTools Protocol event listener detection |
+| `--no-forms` | — | `false` | Disable automatic form detection and filling |
+| `--external-harvest` | — | `false` | Enable external intelligence gathering (Wayback, CT logs, etc.) |
+| `--known-issue-scan-tags` | — | — | Nuclei template tags to include (repeatable) |
+| `--known-issue-scan-severities` | — | — | Filter Nuclei templates by severity (repeatable) |
+| `--known-issue-scan-exclude-tags` | — | — | Nuclei template tags to exclude (repeatable) |
+| `--known-issue-scan-templates-dir` | — | — | Custom Nuclei templates directory |
+| `--sast-adhoc` | — | — | Local path or git URL for ad-hoc SAST scan (auto-detected) |
+| `--rule` | — | — | Filter SAST rules by fuzzy name match |
 
 ## Scan-Specific Flags
 

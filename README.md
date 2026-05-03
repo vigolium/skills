@@ -1,14 +1,14 @@
 # vigolium-scanner
 
-Claude Code skill for operating the [Vigolium](https://github.com/vigolium/vigolium) web vulnerability scanner CLI.
+Claude Code skill for operating the [Vigolium](https://www.vigolium.com/) web vulnerability scanner CLI. See the [documentation](https://docs.vigolium.com/) for full details.
 
 ## What is Vigolium?
 
-Vigolium is a high-fidelity web vulnerability scanner built for security professionals. It combines traditional DAST scanning with AI-powered analysis to find vulnerabilities in web applications. Key capabilities:
+[Vigolium](https://www.vigolium.com/) is a high-fidelity web vulnerability scanner built for security professionals. It combines traditional DAST scanning with AI-powered analysis to find vulnerabilities in web applications. Full documentation is available at [docs.vigolium.com](https://docs.vigolium.com/). Key capabilities:
 
 - **Multi-phase scanning** — discovery, spidering, SPA analysis, audit, and SAST
 - **Flexible input** — scan URLs directly, or import from OpenAPI specs, Burp exports, HAR files, cURL commands, and more
-- **AI agent modes** — autonomous scanning, multi-phase pipelines, and AI-assisted code review
+- **AI agent modes** — autonomous scanning (autopilot, swarm), foreground archon audits, and AI-assisted code review
 - **Extensible** — write custom scanner modules in JavaScript
 - **Source-aware** — whitebox scanning that combines static analysis with dynamic testing
 

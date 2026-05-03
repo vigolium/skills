@@ -130,7 +130,7 @@ vigolium agent query --prompt-template security-code-review --source ./src \
 
 ## agent autopilot
 
-**Usage:** `vigolium agent autopilot [flags]`
+**Usage:** `vigolium agent autopilot [prompt] [flags]`
 
 Launch an AI agent that autonomously discovers, scans, and triages vulnerabilities by driving the vigolium CLI. With SDK protocol (default), the agent gets full coding agent tools (Read, Grep, Glob, Bash, Edit, Write). With ACP protocol, the agent uses a sandboxed terminal restricted to `vigolium` commands.
 
@@ -203,15 +203,29 @@ vigolium agent autopilot -t https://example.com --mcp-enabled \
 # Use ACP backend (sandboxed terminal mode)
 vigolium agent autopilot -t https://example.com --agent claude-acp
 
-# With specific agent backend
-vigolium agent autopilot -t https://example.com --agent gemini
+# Cap cumulative tokens (graceful halt when exceeded)
+vigolium agent autopilot -t https://example.com --token-budget 5000000
+
+# Skip the prompt-safety classifier on the natural-language prompt
+vigolium agent autopilot "scan this internal app at https://app.test" --disable-guardrail
+
+# Override the olium provider for one run
+vigolium agent autopilot -t https://example.com --provider anthropic-api-key
+
+# Drive autopilot through google-vertex (Anthropic-on-Vertex; default model claude-opus-4-6)
+vigolium agent autopilot -t https://example.com \
+  --provider google-vertex --gcp-project my-gcp --gcp-location us-east5
+
+# Same provider, switch to Gemini-native
+vigolium agent autopilot -t https://example.com \
+  --provider google-vertex --model gemini-3.1-pro
 ```
 
 ---
 
-## agent pipeline
+## agent swarm
 
-**Usage:** `vigolium agent pipeline [flags]`
+**Usage:** `vigolium agent swarm [flags]`
 
 > **Note:** `agent pipeline` is a backward-compatible alias for `agent swarm --discover`. New scripts should use `vigolium agent swarm --discover` directly.
 
@@ -247,17 +261,17 @@ vigolium agent pipeline -t https://example.com
 # With focus and source code
 vigolium agent pipeline -t https://example.com --focus "SQL injection" --source ./src
 
-# Control rescan iterations
-vigolium agent pipeline -t https://example.com --max-rescan-rounds 3
+# Analyze a curl command
+vigolium agent swarm --input "curl -X POST https://example.com/api/login -d '{\"user\":\"admin\"}'"
 
 # Skip discovery and start from planning
 vigolium agent pipeline -t https://example.com --skip-phase discover --start-from plan
 
-# Use a scanning profile
-vigolium agent pipeline -t https://example.com --profile deep
+# Scan a record from the database
+vigolium agent swarm --record-uuid 550e8400-e29b-41d4-a716-446655440000
 
-# Preview agent prompts
-vigolium agent pipeline -t https://example.com --dry-run
+# Focus on a specific vulnerability type
+vigolium agent swarm -t https://example.com/api/users --vuln-type sqli
 
 # With specific agent backend
 vigolium agent pipeline -t https://example.com --agent gemini
@@ -581,11 +595,13 @@ Templates use YAML frontmatter with fields like:
 
 ## Agent Configuration
 
-Agents are configured in `vigolium-configs.yaml` under the `agent` section:
+Every agent invocation is routed through the in-process **olium** runtime —
+there are no external subprocess backends. Configure the provider under
+`agent.olium` in `vigolium-configs.yaml`:
 
 ```yaml
 agent:
-  default_agent: claude
+  default_agent: olium
   templates_dir: ~/.vigolium/prompts/
   sessions_dir: ~/.vigolium/agent-sessions/
   stream: true
@@ -683,6 +699,8 @@ agent:
 vigolium agent --list-agents
 ```
 
+Prints the configured olium providers as a table (PROVIDER, MODEL, AUTH, DESCRIPTION, ACTIVE), with the active default marked. Use `--json` for machine-readable output.
+
 ---
 
 ## Output Schemas
@@ -704,7 +722,7 @@ Used for endpoint discovery and scan target generation. Each record has:
 
 ### attack_plan
 
-Used by pipeline phase 2 (Plan). Contains:
+Used by the swarm plan phase. Contains:
 - `module_tags`, `module_ids` — which modules to run
 - `focus_areas`, `skip_paths` — scanning guidance
 - `endpoints` — prioritized targets with rationale
