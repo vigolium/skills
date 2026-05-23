@@ -25,7 +25,10 @@ Run a full vulnerability scan pipeline. Supports multiple targets, input formats
 | `--output` | `-o` | string | — | Write findings to specified output file |
 | `--stats` | — | bool | `false` | Show live progress stats during scanning |
 | `--include-response` | — | bool | `false` | Include full HTTP response body in output |
-| `--stateless` | — | bool | `false` | Use a temporary database, export results to --output, then discard |
+| `--stateless` | — | bool | `false` | Use a temporary database, export results to `--output`, then discard |
+| `--upload-results` | — | bool | `false` | Upload scan results to cloud storage after completion (requires storage config) |
+
+Stateless mode is great for ephemeral CI/CD runs — it creates a temp SQLite file, runs the full scan against it, writes the export/report to `--output`, then deletes the DB (including WAL/SHM sidecars). Requires `--output`; mutually exclusive with `--db`. Combine with `--format jsonl` or `--format html` for shareable artifacts.
 
 ### Request flags (scan & run)
 
@@ -47,11 +50,10 @@ Run a full vulnerability scan pipeline. Supports multiple targets, input formats
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--auth-config` | string | — | Path to auth-config file with session definitions |
+| `--auth-file` | []string | — | Path to auth file (YAML/JSON, single session or `sessions:` bundle), or bare name resolved against session_dir. Repeatable. |
+| `--auth` | []string | — | Inline session in `name:Header:value` format. Repeatable. |
 | `--oast-url` | string | — | Fixed out-of-band callback URL (overrides auto-generated interactsh URL) |
 | `--pilot` | bool | `false` | Enable AI pilot-driven crawling |
-| `--session` | []string | — | Inline session for IDOR/BOLA testing (repeatable, format: name:Header:value) |
-| `--session-file` | []string | — | Path to individual session file (YAML or JSON, repeatable) |
 
 ### Content Discovery flags (scan & run)
 
@@ -59,6 +61,8 @@ Run a full vulnerability scan pipeline. Supports multiple targets, input formats
 |------|------|---------|-------------|
 | `--discover` | bool | `false` | Enable content discovery phase before scanning |
 | `--discover-max-time` | duration | `1h` | Max time for content discovery per target |
+| `--fuzz-wordlist` | string | — | Custom fuzz wordlist path (enables fuzzing during discovery) |
+| `--no-prefix-breaker` | bool | `false` | Disable per-prefix circuit breaker that stops trap-directory recursion |
 
 ### Browser Spidering flags (scan & run)
 
@@ -110,7 +114,7 @@ vigolium scan -T targets.txt
 vigolium scan -t https://example.com --strategy deep
 
 # Phase isolation
-vigolium scan -t https://example.com --only audit
+vigolium scan -t https://example.com --only dynamic-assessment
 vigolium scan -t https://example.com --only ext --ext ./custom-check.js
 vigolium scan -t https://example.com --skip discovery,spidering
 
@@ -293,7 +297,7 @@ Run a single scan phase directly. Equivalent to `vigolium scan --only <phase>`.
 | `known-issue-scan` | — |
 | `spidering` | `spitolas` |
 | `sast` | — |
-| `audit` | `dynamic-assessment` |
+| `dynamic-assessment` | `audit`, `dast`, `assessment` |
 | `extension` | `ext` |
 
 The `run` command accepts the same flag groups as `scan`: Spidering, Discovery, Harvest, KnownIssueScan, SAST, Input Format, Request, Output, and Other (--oast-url, --pilot).
@@ -332,9 +336,16 @@ vigolium run audit -t https://example.com
 
 - Default: `--heuristics-check basic`
 - Levels: `none`, `basic`, `advanced`
+- `basic` probes target root pages to detect content type (HTML / JSON / blank) and skips spidering for non-HTML targets
+- `advanced` adds deep HTML analysis to detect SPA frameworks and optimize phase selection
+- `none` runs all enabled phases unconditionally
 - `--skip-heuristics` is shorthand for `--heuristics-check=none`
 - `--only` automatically disables heuristics
 - Precedence: `--skip-heuristics` > `--heuristics-check` > config > `basic`
+
+### Intensity Presets
+
+`--intensity quick|balanced|deep` is a cross-cutting preset that maps to a scanning profile + strategy. It is also honored by `agent autopilot` and `agent swarm` with backend-specific defaults. Explicit flags always override the preset — e.g. `--intensity deep --scanning-profile foo` applies `deep`'s strategy but your custom profile.
 
 ### Scanning Pace
 

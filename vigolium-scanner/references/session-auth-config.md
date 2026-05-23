@@ -1,6 +1,11 @@
 # Session / Auth Configuration
 
-Session configuration enables authenticated scanning across all agent modes and standalone scans. Pipeline Phase 0 (source analysis) can auto-generate this configuration, or it can be provided manually via `--auth-config`.
+Session configuration enables authenticated scanning across all agent modes and standalone scans. Pipeline Phase 0 (source analysis) can auto-generate this configuration, or it can be provided manually via the repeatable `--auth-file` and `--auth` flags.
+
+| Flag | Accepts | Repeatable |
+|------|---------|------------|
+| `--auth-file <path>` | YAML/JSON file (single session **or** `sessions:` bundle), or a bare name resolved against `scanning_strategy.session.session_dir` | yes |
+| `--auth <name:Header:value>` | Inline session — name and header injected as static headers | yes |
 
 ## Session Config Format
 
@@ -89,39 +94,39 @@ sessions:
 | `group` | int | Capture group index, default 1 (for regex source) |
 | `apply_as` | string | Header template, e.g. `"Authorization: Bearer {value}"` |
 
-## Managing Sessions with `vigolium session`
+## Managing Sessions with `vigolium auth`
 
-The `vigolium session` command manages session configs in the database:
+The `vigolium auth` command manages session configs in the database:
 
 ```bash
 # Load session config from a file
-vigolium session load auth-config.yaml --host example.com
+vigolium auth load auth-config.yaml --host example.com
 
 # Load from stdin
-cat session-config.json | vigolium session load
+cat session-config.json | vigolium auth load
 
 # Load agent-generated session config (auto-detected from path)
-vigolium session load ~/.vigolium/agent-sessions/agt-xxx/session-config.json
+vigolium auth load ~/.vigolium/agent-sessions/<uuid>/session-config.json
 
 # Load a raw HTTP login request (auto-discovers tokens from response)
-cat login-req.txt | vigolium session load --name admin --host example.com
+cat login-req.txt | vigolium auth load --name admin --host example.com
 
 # Skip login flow validation
-vigolium session load sessions.json --no-validate
+vigolium auth load sessions.json --no-validate
 
 # Validate session config syntax before loading
-vigolium session lint auth-config.yaml
-cat session-config.json | vigolium session lint --stdin
+vigolium auth lint auth-config.yaml
+cat session-config.json | vigolium auth lint --stdin
 
 # List loaded sessions
-vigolium session list
-vigolium session ls --host example.com
+vigolium auth list
+vigolium auth ls --host example.com
 
 # Generate TOTP code for 2FA login flows
-vigolium session totp --secret JBSWY3DPEHPK3PXP
+vigolium auth totp --secret JBSWY3DPEHPK3PXP
 ```
 
-### `vigolium session load` Flags
+### `vigolium auth load` Flags
 
 | Flag | Description |
 |------|-------------|
@@ -133,42 +138,44 @@ vigolium session totp --secret JBSWY3DPEHPK3PXP
 
 ## Usage
 
-### Auto-Generated from Source Analysis (Pipeline Phase 0)
+### Auto-Generated from Source Analysis
 
 ```bash
 # Provide source code — the agent analyzes auth code and generates session config automatically
-vigolium agent pipeline -t http://localhost:3000 --source ~/projects/my-app
+vigolium agent swarm --discover -t http://localhost:3000 --source ~/projects/my-app
 
 # Session config is written to a temp file and applied to all subsequent phases
 # (discovery, scanning, triage all use authenticated requests)
 ```
 
-### Manual Auth Config File
+### Manual Auth File
 
 ```bash
-# Pass a YAML auth config file to any scan command
-vigolium scan -t https://example.com --auth-config auth.yaml
+# Pass a YAML auth file to any scan command
+vigolium scan -t https://example.com --auth-file auth.yaml
 
 # Works with scan-url too
-vigolium scan-url https://example.com/api/admin --auth-config auth.yaml
+vigolium scan-url https://example.com/api/admin --auth-file auth.yaml
 
 # JSON format works the same way
-vigolium scan -t https://example.com --auth-config auth.json
+vigolium scan -t https://example.com --auth-file auth.json
 ```
 
 ### Inline Sessions
 
+The `--auth` flag accepts inline `name:Header:value` strings.
+
 ```bash
 # Simple inline session (name:Header:value format)
-vigolium scan -t https://example.com --session "admin:Cookie:session_id=abc123"
+vigolium scan -t https://example.com --auth "admin:Cookie:session_id=abc123"
 
 # Bearer token
-vigolium scan -t https://example.com --session "user1:Authorization:Bearer eyJhbGciOi..."
+vigolium scan -t https://example.com --auth "user1:Authorization:Bearer eyJhbGciOi..."
 
 # Multiple sessions for IDOR testing
 vigolium scan -t https://example.com \
-  --session "admin:Authorization:Bearer admin-token" \
-  --session "user:Authorization:Bearer user-token"
+  --auth "admin:Authorization:Bearer admin-token" \
+  --auth "user:Authorization:Bearer user-token"
 ```
 
 ## Examples

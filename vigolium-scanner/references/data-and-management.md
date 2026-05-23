@@ -1,9 +1,13 @@
 # Data & Management Commands Reference
 
-Complete reference for `db`, `finding`, `module`, `extensions`, `js`, `config`, `scope`, `source`, `session`, `project`, `strategy`, `export`, and `version` commands.
+Complete reference for `init`, `import`, `log`, `doctor`, `db`, `finding`, `module`, `extensions` (alias `ext`), `js`, `config`, `scope`, `source`, `auth`, `project`, `storage`, `strategy`, `export`, and `version` commands.
 
 ## Table of Contents
 
+- [init](#init)
+- [import](#import)
+- [log](#log)
+- [doctor](#doctor)
 - [db](#db)
 - [db list / ls](#db-list)
 - [db stats](#db-stats)
@@ -17,12 +21,134 @@ Complete reference for `db`, `finding`, `module`, `extensions`, `js`, `config`, 
 - [extensions](#extensions)
 - [js](#js)
 - [config](#config)
+- [config clean](#config-clean)
 - [scope](#scope)
 - [source](#source)
-- [session](#session)
+- [auth](#auth)
 - [project](#project)
+- [storage](#storage)
+- [storage ls](#storage-ls)
+- [storage upload](#storage-upload)
+- [storage download](#storage-download)
+- [storage results](#storage-results)
+- [storage presign](#storage-presign)
+- [storage rm](#storage-rm)
 - [strategy](#strategy)
 - [version](#version)
+
+---
+
+## init
+
+**Usage:** `vigolium init [--force]`
+
+Create `~/.vigolium/` with a default config file (including a freshly generated API key), database schema, default scanning profiles, prompt templates, JavaScript extensions, and SAST rules. Idempotent: skips components that already exist unless `--force` is passed.
+
+With `--force`, the existing config is rewritten with a new API key and the preset directories (`profiles/`, `extensions/`, `prompts/`) are re-extracted from the embedded assets.
+
+```bash
+vigolium init
+vigolium init --force   # regenerate API key + re-extract preset data
+```
+
+Output (on success):
+
+```
+✓ Vigolium initialized successfully!
+  ℹ Config:   ~/.vigolium/vigolium-configs.yaml
+  ℹ Database: ~/.vigolium/database-vgnm.sqlite
+  ℹ Docs:     https://docs.vigolium.com
+```
+
+---
+
+## import
+
+**Usage:** `vigolium import <path>`
+
+Import scan data into the current project's database. Two input formats are supported (auto-detected by path type):
+
+- **Audit output folder** (directory): produced by `vigolium agent audit` (vigolium-audit or piolium leg) — contains `audit-state.json` and `findings-draft/`. Creates a new `agentic_scan` row plus all findings; severity breakdown is printed on completion.
+- **JSONL file** (regular file): each line is a JSON object wrapped in an envelope like `{"type": "http_record", "data": {...}}` or `{"type": "finding", "data": {...}}`. This matches the output of `vigolium export --format jsonl`. Records are saved via `SaveRecordsBatch` (batch size 500); findings are deduplicated on save.
+
+```bash
+vigolium import /path/to/vigolium-results/         # audit output folder
+vigolium import scan-results.jsonl                 # JSONL export
+vigolium import /tmp/demo/juice-shop.jsonl
+
+# After an interactive audit (`agent audit -i`), turn the on-disk results into a report:
+vigolium import ./src/vigolium-results --format html -o audit-report.html
+```
+
+Notes:
+- Imported findings inherit the current project's UUID and default `finding_source = "import"` when the field is empty.
+- Unknown envelope types are counted and reported at the end (e.g. for forward-compatibility).
+- Use `--project-id` / `--project-name` (or `VIGOLIUM_PROJECT`) to target a specific project.
+
+---
+
+## log
+
+**Usage:** `vigolium log [uuid] [flags]`
+
+View raw `runtime.log` for a native scan or agentic scan session. When called without a UUID, behaves like `log ls` and lists all sessions.
+
+### Log resolution order
+
+1. Agentic session file: `~/.vigolium/agent-sessions/<uuid>/runtime.log`
+2. Native session file: `~/.vigolium/native-sessions/<uuid>/runtime.log`
+3. DB fallback: `scan_logs` table (used when `scanning_strategy.scan_logs.persist_logs` is disabled)
+
+The legacy `run.log` filename is also resolved for older sessions. Agent audit child runs whose UUID does not match a session directory fall back to their parent's `SessionDir` column.
+
+### log flags
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--tail` | `-n` | int | `200` | Show the last N lines (0 = none, -1 = all) |
+| `--full` | — | bool | `false` | Show the full log (shortcut for `--tail -1`) |
+| `--follow` | `-f` | bool | `false` | Follow log output as it is written (tail -f). Auto-enabled when the session is still running, unless `--follow=false` is set explicitly |
+| `--strip-ansi` | — | bool | `false` | Strip ANSI color codes from output |
+| `--tui` / `--no-tui` | — | bool | — | Enable / force-disable interactive picker (affects `log ls` behaviour) |
+
+### log ls
+
+`vigolium log ls` prints a merged table of native + agentic sessions (kind, UUID, status, target, log availability, size, creation time). Status is color-coded. A tip at the bottom shows how to tail a specific UUID.
+
+### Examples
+
+```bash
+# Table of sessions
+vigolium log ls
+vigolium log                               # same as `log ls`
+
+# Interactive picker
+vigolium log --tui
+
+# Stream a session's log, auto-following if it's still running
+vigolium log 550e8400-e29b-41d4-a716-446655440000
+
+# Tail the last 500 lines
+vigolium log <uuid> --tail 500
+
+# Full log, no follow, strip ANSI for grep
+vigolium log <uuid> --full --strip-ansi | grep -i sqli
+
+# Force follow
+vigolium log <uuid> -f
+```
+
+---
+
+## doctor
+
+**Usage:** `vigolium doctor`
+
+Run a health check on the installation: verifies the config and database paths, external binaries (`claude`, `codex`, `nuclei`, `kingfisher`), directory permissions, and extracted preset data. Use this after `vigolium init` or when an `agent` backend refuses to launch.
+
+```bash
+vigolium doctor
+```
 
 ---
 
@@ -320,7 +446,7 @@ Top-level export command. Exports database tables and module registry as JSONL o
 | `--format` | — | string | `jsonl` | Export format: html, jsonl |
 | `--output` | `-o` | string | — | Output file (required for html) |
 | `--only` | — | []string | all | Export only these tables (repeatable: http, findings, scans, modules, oast, source-repos, scopes) |
-| `--lite` | — | bool | `false` | Export summary fields only, omit raw HTTP data and headers |
+| `--omit-response` | — | bool | `false` | Omit raw HTTP request/response bytes from output (keeps metadata, smaller files) |
 | `--search` | — | string | — | Fuzzy search filter across URLs, paths, hostnames, methods, content types, and sources |
 | `--limit` | — | int | `0` (unlimited) | Max records per table |
 
@@ -332,7 +458,7 @@ vigolium export --format jsonl --only findings
 vigolium export --format jsonl --only findings,http
 vigolium export --format html -o report.html
 vigolium export --only modules
-vigolium export --lite --only http -o urls.jsonl
+vigolium export --omit-response --only http -o urls.jsonl
 vigolium export --search "example.com" -o filtered.jsonl
 ```
 
@@ -564,6 +690,30 @@ Config file location: `~/.vigolium/vigolium-configs.yaml`
 
 ---
 
+## config clean
+
+**Usage:** `vigolium config clean [-F/--force]`
+
+Reset Vigolium to a clean state: remove the entire `~/.vigolium/` directory (config, database, extensions, prompts, SAST rules, session directories) and regenerate fresh defaults by running the same bootstrap as `vigolium init`.
+
+Prompts for `yes` confirmation unless `-F/--force` is passed.
+
+```bash
+vigolium config clean
+vigolium config clean -F            # skip confirmation
+```
+
+Warning shown:
+
+```
+✗ Warn: This will remove ~/.vigolium (config, database, and all local data)
+Proceed? (type 'yes' to confirm):
+```
+
+Use this at the start of a new engagement or when an installation has drifted out of sync with the binary. After cleaning, the default API key is regenerated and all preset data (profiles, prompts, extensions, SAST rules, vigolium-audit harness) is re-extracted.
+
+---
+
 ## scope
 
 **Usage:** `vigolium scope [flags]` (aliases: `sc`)
@@ -635,28 +785,28 @@ vigolium source rm 2
 
 ---
 
-## session
+## auth
 
-**Usage:** `vigolium session <subcommand> [flags]`
+**Usage:** `vigolium auth <subcommand> [flags]`
 
-Manage session authentication configurations and utilities.
+Manage authentication configurations and utilities.
 
 ### Subcommands
 
 | Command | Aliases | Description |
 |---------|---------|-------------|
-| `session lint` | — | Validate session auth config files for errors and warnings |
-| `session list` | `ls` | List session authentication configs |
-| `session load` | — | Load session auth configs from a file or stdin into the database |
-| `session totp` | — | Generate a TOTP code from a base32 secret |
+| `auth lint` | — | Validate auth config files for errors and warnings |
+| `auth list` | `ls` | List authentication configs |
+| `auth load` | — | Load auth configs from a file or stdin into the database |
+| `auth totp` | — | Generate a TOTP code from a base32 secret |
 
 ### Examples
 
 ```bash
-vigolium session list
-vigolium session lint auth-config.yaml
-vigolium session load auth-config.yaml
-vigolium session totp --secret JBSWY3DPEHPK3PXP
+vigolium auth list
+vigolium auth lint auth-config.yaml
+vigolium auth load auth-config.yaml
+vigolium auth totp --secret JBSWY3DPEHPK3PXP
 ```
 
 ---
@@ -683,6 +833,156 @@ vigolium project list
 vigolium project create --name my-project
 vigolium project use my-project
 vigolium project config
+```
+
+---
+
+## storage
+
+**Usage:** `vigolium storage <subcommand>`
+
+Manage cloud-storage objects scoped to the **active project** (selected via `--project-id`, `--project-name`, or `VIGOLIUM_PROJECT`). Mirrors the REST endpoints under `/api/storage/*`.
+
+**Requires** `storage.enabled: true` in `vigolium-configs.yaml` (or `VIGOLIUM_STORAGE_ENABLED=true`) plus `storage.driver`, `storage.bucket`, `storage.access_key`, and `storage.secret_key`. When storage is disabled, every subcommand prints a tip showing how to enable it and exits cleanly (no error).
+
+### Subcommands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `storage ls` | `list` | List objects under the project's prefix |
+| `storage upload` | — | Upload a single local file |
+| `storage download` | `get` | Download an object by key |
+| `storage results` | — | Download a scan's `results.tar.gz` bundle by scan UUID |
+| `storage presign` | — | Generate a presigned GET or PUT URL |
+| `storage rm` | `delete` | Delete one or more objects |
+
+### Source-archive integration
+
+`agent audit` accepts `--source gs://<project>/<key>` for source archives. The archive is downloaded, extracted (`.zip / .tar.gz / .tar.bz2 / .tar.xz`), and cleaned up automatically.
+
+### Result-bundle integration
+
+Pass `--upload-results` to `scan`, `agent autopilot`, `agent swarm`, `agent audit`, or `agent query` to bundle the session/output and push it to storage at the end of the run. Native scan bundles land at `native-scans/<scan-uuid>/results.tar.gz`; agentic bundles land at `agentic-scans/<uuid>/results.tar.gz`. `vigolium storage results <uuid>` checks both prefixes.
+
+---
+
+## storage ls
+
+**Usage:** `vigolium storage ls [flags]` (alias `list`)
+
+List objects under the active project's prefix in the configured bucket.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--prefix` | string | — | Limit results to keys under this prefix (e.g. `ugc/`, `native-scans/`) |
+| `--tree` | bool | `false` | Render objects as a directory tree (directories first, then files) |
+| `--json` | bool | `false` | Output as JSON |
+
+```bash
+vigolium storage ls
+vigolium storage ls --prefix ugc/
+vigolium storage ls --tree
+vigolium storage ls --json
+```
+
+---
+
+## storage upload
+
+**Usage:** `vigolium storage upload <file> [flags]`
+
+Upload a single local file to the active project's storage. Without `--key`, the file is stored under `ugc/<basename>` (matching `POST /api/storage/upload-source`). Pass `--key` to choose an explicit object key. Directories are rejected.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--key` | string | `ugc/<basename>` | Object key |
+| `--content-type` | string | — | `Content-Type` to set on the object |
+
+```bash
+# Default key (ugc/report.pdf)
+vigolium storage upload ./report.pdf
+
+# Explicit key
+vigolium storage upload ./report.pdf --key reports/q4.pdf
+
+# Pin a content type
+vigolium storage upload ./report.pdf --content-type application/pdf
+```
+
+---
+
+## storage download
+
+**Usage:** `vigolium storage download <key> [flags]` (alias `get`)
+
+Download an object from the active project's storage by full key. Streams to stdout by default; use `-o` to write to a file.
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--output` | `-o` | string | — | Write to this file instead of stdout |
+
+```bash
+# Stream to a file
+vigolium storage download ugc/report.pdf -o report.pdf
+
+# Stream to stdout (for pipelines)
+vigolium storage download ugc/notes.txt | grep TODO
+```
+
+---
+
+## storage results
+
+**Usage:** `vigolium storage results <scan-uuid> [flags]`
+
+Download the `results.tar.gz` bundle for a native or agentic scan run. Tries `native-scans/<uuid>/results.tar.gz` first, then `agentic-scans/<uuid>/results.tar.gz`. Default output filename is `results-<uuid>.tar.gz` in the current directory.
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--output` | `-o` | string | `results-<uuid>.tar.gz` | Write to this file |
+
+```bash
+vigolium storage results 550e8400-e29b-41d4-a716-446655440000
+vigolium storage results 550e8400-e29b-41d4-a716-446655440000 -o results.tgz
+```
+
+---
+
+## storage presign
+
+**Usage:** `vigolium storage presign --key <key> [flags]`
+
+Generate a presigned URL for direct GET (download) or PUT (upload) against the active project's storage. Mirrors `POST /api/storage/presign`.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--key` | string | — | Object key (**required**) |
+| `--method` | string | `GET` | HTTP method: `GET` or `PUT` |
+| `--expiry` | duration | `1h` | URL validity duration (e.g. `30m`, `1h`, `24h`) |
+| `--json` | bool | `false` | Output as JSON `{url, key, method, expiry_seconds}` |
+
+```bash
+# 1h GET URL
+vigolium storage presign --key ugc/foo.tar.gz --method GET --expiry 1h
+
+# 30m PUT URL (machine-readable)
+vigolium storage presign --key uploads/new.tar.gz --method PUT --expiry 30m --json
+```
+
+---
+
+## storage rm
+
+**Usage:** `vigolium storage rm <key> [<key>...] [flags]` (alias `delete`)
+
+Permanently delete one or more objects from the active project's storage. Prompts for confirmation (typed `yes`) unless `-F` / `--force` is set.
+
+```bash
+# Single delete (prompts for confirmation)
+vigolium storage rm ugc/foo.tar.gz
+
+# Bulk delete, skip confirmation
+vigolium storage rm ugc/a.pdf ugc/b.pdf -F
 ```
 
 ---

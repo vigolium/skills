@@ -13,12 +13,18 @@ Alphabetical index of all vigolium CLI flags across all commands.
 - [Agent Flags](#agent-flags)
 - [Agent Query Flags](#agent-query-flags)
 - [Agent Autopilot Flags](#agent-autopilot-flags)
-- [Agent Pipeline Flags](#agent-pipeline-flags)
 - [Agent Swarm Flags](#agent-swarm-flags)
+- [Agent Olium Flags](#agent-olium-flags)
+- [Agent Piolium Flags](#agent-piolium-flags)
+- [Agent Audit Flags](#agent-audit-flags)
 - [Agent Session Flags](#agent-session-flags)
+- [Olium Provider Override Flags (shared)](#olium-provider-override-flags-shared)
+- [Log Flags](#log-flags)
+- [Import Flags](#import-flags)
 - [Finding Flags](#finding-flags)
 - [Traffic Flags](#traffic-flags)
 - [DB Flags](#db-flags)
+- [Storage Flags](#storage-flags)
 - [Export Flags](#export-flags)
 - [Module Flags](#module-flags)
 - [Extensions Flags](#extensions-flags)
@@ -54,8 +60,10 @@ Persistent flags available on every command.
 | `--list-modules` | `-M` | bool | `false` | List scanner modules |
 | `--log-file` | — | string | — | Write logs to file (JSON format) |
 | `--max-host-error` | — | int | `30` | Skip host after N consecutive errors |
-| `--max-per-host` | — | int | `2` | Max concurrent requests per host |
-| `--max-findings-per-module` | — | int | `15` | Stop reporting after N findings per module (0 = unlimited) |
+| `--max-per-host` | — | int | `30` | Max concurrent requests per host |
+| `--max-findings-per-module` | — | int | `10` | Stop reporting after N findings per module (0 = unlimited) |
+| `--intensity` | — | string | — | Scan intensity preset: `quick`, `balanced`, or `deep` (maps to scanning profile + strategy) |
+| `--full-native-scan-on-receive` | — | bool | `false` | Run the full native scan pipeline (discovery + spidering + dynamic-assessment) continuously on received records |
 | `--module-tag` | — | []string | — | Filter modules by tag (OR condition, repeatable) |
 | `--modules` | `-m` | []string | `all` | Scanner modules to enable |
 | `--no-clustering` | — | bool | `false` | Disable deduplication of identical concurrent HTTP requests |
@@ -95,7 +103,8 @@ Flags specific to `vigolium scan` and `vigolium run`.
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--advanced-options` | `-a` | stringToString | — | Module-specific options as key=value (e.g. -a xss.dom=true) |
-| `--auth-config` | — | string | — | Path to auth-config file with session definitions (YAML or JSON) |
+| `--auth-file` | — | strings | — | Path to auth file (YAML/JSON, single session or `sessions:` bundle), or bare name resolved against session_dir. Repeatable. |
+| `--auth` | — | strings | — | Inline session in `name:Header:value` format. Repeatable. |
 | `--browser-engine` | `-E` | string | `chromium` | Browser engine |
 | `--browsers` | `-b` | int | `1` | Number of parallel browser instances for spidering |
 | `--discover` | — | bool | `false` | Enable content discovery phase before scanning |
@@ -111,20 +120,21 @@ Flags specific to `vigolium scan` and `vigolium run`.
 | `--no-cdp` | — | bool | `false` | Disable Chrome DevTools Protocol event listener detection |
 | `--no-forms` | — | bool | `false` | Disable automatic form detection and filling during spidering |
 | `--oast-url` | — | string | — | Fixed out-of-band callback URL (overrides auto-generated interactsh URL) |
+| `--omit-response` | — | bool | `false` | Omit raw HTTP request/response bytes from the output file (keeps metadata, smaller files) |
 | `--output` | `-o` | string | — | Output file path |
-| `--pilot` | — | bool | `false` | Enable AI pilot-driven crawling (ACP agent controls browser) |
 | `--required-only` | — | bool | `false` | Parse only required fields from input format (ignore optional) |
 | `--retries` | — | int | `1` | Number of retry attempts for failed requests |
 | `--rule` | — | string | — | Filter SAST rules by fuzzy name match (e.g. 'gin', 'route') |
 | `--sast-adhoc` | — | string | — | Local path or git URL for ad-hoc SAST scan (auto-detected, results not saved to database) |
-| `--session` | — | []string | — | Inline session for IDOR/BOLA testing (repeatable, format: name:Header:value) |
-| `--session-file` | — | []string | — | Path to individual session file (YAML or JSON, repeatable) |
 | `--skip-format-validation` | — | bool | `false` | Skip validation of input file format |
 | `--spider` | — | bool | `false` | Enable browser-based spidering phase before scanning |
 | `--spider-max-time` | — | duration | `30m` | Spidering timeout |
 | `--stateless` | — | bool | `false` | Use a temporary database, export results to --output, then discard |
 | `--stats` | — | bool | `false` | Show live progress stats during scanning |
 | `--stream` | — | bool | `false` | Process targets as a stream without buffering or deduplication |
+| `--upload-results` | — | bool | `false` | Upload scan results to cloud storage after completion (requires storage config) |
+| `--fuzz-wordlist` | — | string | — | Custom fuzz wordlist path (enables fuzzing during discovery) |
+| `--no-prefix-breaker` | — | bool | `false` | Disable per-prefix circuit breaker that stops trap-directory recursion |
 
 ---
 
@@ -169,11 +179,10 @@ Flags specific to `vigolium server`.
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--agent-acp-cmd` | — | string | — | Custom ACP agent command for all agent runs |
 | `--alternative-ingest-key` | — | []string | — | Additional API key for ingestion endpoints (repeatable) |
 | `--catchup-threads` | — | int | `4` | Workers for background scanning of unscanned records |
 | `--disable-catchup` | — | bool | `false` | Disable automatic background scanning of unscanned records |
-| `--disable-warm-session` | — | bool | `false` | Disable agent subprocess warm session pooling |
+| `--disable-warm-session` | — | bool | `false` | Disable agent warm session pooling |
 | `--host` | — | string | `0.0.0.0` | Bind address for the API server |
 | `--ingest-proxy-port` | — | int | `0` | Transparent HTTP proxy port for recording traffic (0 = disabled) |
 | `--mem-buffer` | — | int | `10000` | In-memory queue capacity before spilling to disk |
@@ -208,16 +217,15 @@ Flags specific to `vigolium agent` (parent command supports `--list-templates` a
 
 ## Agent Query Flags
 
-Flags specific to `vigolium agent query`.
+Flags specific to `vigolium agent query`. Also accepts the [shared olium provider override flags](#olium-provider-override-flags-shared).
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--agent` | — | string | from config | Agent backend to use |
-| `--agent-acp-cmd` | — | string | — | Custom ACP agent command |
-| `--agent-timeout` | — | duration | `5m` | Maximum time for agent execution |
+| `--agent-label` | — | string | — | Label recorded on the AgenticScan DB row (deprecated alias `--agent`) |
+| `--max-duration` | — | duration | `5m` | Maximum time for agent execution (deprecated alias `--agent-timeout`) |
 | `--append` | — | string | — | Append extra text to the rendered prompt |
 | `--dry-run` | — | bool | `false` | Print the rendered prompt without executing |
-| `--files` | — | []string | — | Specific files to include (relative to --source) |
+| `--files` | — | []string | — | Specific files to include (relative to `--source`) |
 | `--instruction` | — | string | — | Custom instruction to guide the agent |
 | `--instruction-file` | — | string | — | Path to a file containing custom instructions |
 | `--output` | — | string | — | Write agent output to this file |
@@ -228,102 +236,178 @@ Flags specific to `vigolium agent query`.
 | `--source` | — | string | — | Path to source code repository |
 | `--source-label` | — | string | — | Label for records ingested from agent output |
 | `--stdin` | — | bool | `false` | Read prompt from stdin |
+| `--upload-results` | — | bool | `false` | Upload session bundle to cloud storage after completion |
 
 ---
 
 ## Agent Autopilot Flags
 
-Flags specific to `vigolium agent autopilot`.
+Flags specific to `vigolium agent autopilot`. Also accepts a positional natural-language prompt and the [shared olium provider override flags](#olium-provider-override-flags-shared).
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--agent` | — | string | from config | Agent backend to use |
-| `--agent-acp-cmd` | — | string | — | Custom ACP agent command |
-| `--dry-run` | — | bool | `false` | Render the system prompt without launching the agent |
-| `--files` | — | []string | — | Specific files to include (relative to --source) |
+| `--target` | `-t` | string | — | Target URL (derived from `--input` if not set) |
+| `--input` | — | string | — | Raw input (curl, raw HTTP, Burp XML, URL, base64). Reads from stdin if piped |
+| `--record-uuid` | — | string | — | Use an HTTP record from the database as the seed input |
+| `--source` | — | string | — | Path to application source code |
+| `--files` | — | []string | — | Specific files to include (relative to `--source`) |
 | `--focus` | — | string | — | Focus area hint |
-| `--input` | — | string | — | Raw input (curl command, raw HTTP, Burp XML, URL) |
+| `--focus-routes` | — | []string | — | Protected or browser-focused routes to prioritize after auth |
+| `--audit` | — | string | `lite` | vigolium-audit mode run before the operator: `lite` (3-phase), `balanced` (9-phase), `deep` (12-phase), `mock`, or `off`. Default: `lite` when `--source` is set |
+| `--piolium` | — | string | — | Piolium audit mode: `lite`, `balanced`, `deep`, `longshot`, etc. Empty triggers auto-pick (piolium when `pi` is installed, else vigolium-audit). Setting `--piolium` explicitly forces piolium and turns `--audit` off |
+| `--diff` | — | string | — | Focus on changed code: PR URL, git ref range, or `HEAD~N` |
+| `--last-commits` | — | int | `0` | Focus on last N commits (shorthand for `--diff HEAD~N`) |
+| `--max-duration` | — | duration | `6h` | Maximum wall-clock duration for the autopilot session |
+| `--intensity` | — | string | `balanced` | Scan intensity preset: `quick`, `balanced`, or `deep` (sets max-command budget, audit mode, browser, pre-scan strategy) |
+| `--triage` | — | bool | `false` | After the scan completes, run an AI triage pass over the findings (confirm real issues vs false positives) |
+| `--no-prescan` | — | bool | `false` | Skip the native pre-scan that seeds http_records before the operator agent (target-only runs; no-op when `--source` is set) |
+| `--no-preflight-discovery` | — | bool | `false` | Skip the pre-flight discovery + OpenAPI/Swagger ingestion pass that seeds http_records |
+| `--no-post-halt-verify` | — | bool | `false` | Skip the post-halt coverage verification re-entry (operator halts → coverage probe → re-prompt when new routes appear) |
+| `--post-halt-gap-threshold` | — | int | `0` | Min new (method, URL) routes the post-halt probe must find before re-entering the agent (0 = built-in default 5) |
+| `--plan-file` | — | string | — | Path to a plan file mixing free-text guidance and raw HTTP request(s); owns the instruction + seed input (mutually exclusive with `--input`/`--instruction`/`--instruction-file`) |
 | `--instruction` | — | string | — | Custom instruction to guide the agent |
 | `--instruction-file` | — | string | — | Path to a file containing custom instructions |
-| `--max-commands` | — | int | `100` | Maximum number of CLI commands the agent can execute |
-| `--mcp-enabled` | — | bool | `false` | Enable MCP server passthrough to ACP sessions |
-| `--mcp-server` | — | []string | — | MCP servers to attach (format: name=command,arg1,arg2 or name=http://url) |
-| `--resume` | — | string | — | Resume from a previous session directory |
+| `--browser` | — | bool | `false` | Enable agent-browser for browser-based interactions |
+| `--headed` | — | bool | `false` | Show the browser window during probes (requires `--browser`; sets `VIGOLIUM_BROWSER_HEADED=1`) |
+| `--credentials` | — | string | — | Credentials for auth preflight |
+| `--auth-required` | — | bool | `false` | Require auth/session preparation before the autonomous operator starts |
+| `--requires-browser` | — | bool | `false` | Require browser-assisted auth/setup instead of HTTP-only preflight |
+| `--browser-start-url` | — | string | — | Explicit browser/login start URL for auth preflight |
+| `--dry-run` | — | bool | `false` | Render the system prompt without launching the agent |
 | `--show-prompt` | — | bool | `false` | Print rendered prompt to stderr before executing |
-| `--source` | — | string | — | Path to application source code |
-| `--specialists` | — | []string | — | Vulnerability classes for specialist pipeline |
-| `--target` | `-t` | string | — | Target URL |
-| `--timeout` | — | duration | `6h` | Maximum duration for the autopilot session |
-
----
-
-## Agent Pipeline Flags
-
-Flags specific to `vigolium agent pipeline` (backward-compatible alias for `vigolium agent swarm --discover`).
-
-| Flag | Short | Type | Default | Description |
-|------|-------|------|---------|-------------|
-| `--agent` | — | string | from config | Agent backend to use |
-| `--agent-acp-cmd` | — | string | — | Custom ACP agent command |
-| `--dry-run` | — | bool | `false` | Render agent prompts without executing |
-| `--files` | — | []string | — | Specific source files to include |
-| `--focus` | — | string | — | Focus area hint for the planning agent |
-| `--input` | — | string | — | Raw input |
-| `--instruction` | — | string | — | Custom instruction to guide the agent |
-| `--instruction-file` | — | string | — | Path to a file containing custom instructions |
-| `--max-rescan-rounds` | — | int | `2` | Maximum triage->rescan iterations |
-| `--profile` | — | string | — | Scanning profile to use |
-| `--show-prompt` | — | bool | `false` | Print rendered prompts to stderr |
-| `--skip-phase` | — | []string | — | Skip specific phases |
-| `--source` | — | string | — | Path to application source code |
-| `--start-from` | — | string | — | Resume pipeline from a specific phase |
-| `--target` | `-t` | string | — | Target URL |
-| `--timeout` | — | duration | `1h` | Maximum total pipeline duration |
+| `--upload-results` | — | bool | `false` | Upload scan results to cloud storage after completion |
+| `--disable-guardrail` | — | bool | `false` | Skip the prompt-safety classifier on the natural-language prompt |
 
 ---
 
 ## Agent Swarm Flags
 
-Flags specific to `vigolium agent swarm`.
+Flags specific to `vigolium agent swarm`. Also accepts a positional natural-language prompt and the [shared olium provider override flags](#olium-provider-override-flags-shared).
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--agent` | — | string | from config | Agent backend to use |
-| `--agent-acp-cmd` | — | string | — | Custom ACP agent command |
-| `--batch-concurrency` | — | int | `0` | Max parallel master agent batches (0 = auto) |
-| `--code-audit` | — | bool | `false` | Enable AI security code audit phase |
-| `--custom-agent` | — | []string | — | Custom agents the swarm can invoke (repeatable) |
-| `--custom-slash-command` | — | []string | — | Slash commands available inside the ACP session (repeatable) |
-| `--discover` | — | bool | `false` | Run discovery+spidering before master agent planning |
-| `--dry-run` | — | bool | `false` | Render prompts without executing |
+| `--target` | `-t` | string | — | Target URL (required when `--source` is used) |
+| `--input` | — | string | — | Raw input (curl, raw HTTP, Burp XML, URL) |
+| `--record-uuid` | — | []string | — | HTTP record UUID from database (repeatable, or comma-separated) |
+| `--all-records` | — | bool | `false` | Use every HTTP record in the active project as input |
+| `--records-from` | — | string | — | Filter ingested HTTP records by spec (e.g. `host=example.com,status=200,method=GET,path=/api,since=2026-04-01`) |
+| `--source` | — | string | — | Path to application source code |
 | `--files` | — | []string | — | Specific source files to include |
+| `--vuln-type` | — | string | — | Vulnerability type focus |
 | `--focus` | — | string | — | Focus area hint for the agent |
-| `--input` | — | string | — | Raw input |
+| `--modules` | `-m` | []string | — | Explicit module names to include |
+| `--max-iterations` | — | int | `3` | Maximum triage-rescan iterations (alias `--max-rescan-rounds`) |
+| `--agent-label` | — | string | — | Label recorded on the AgenticScan DB row (deprecated alias `--agent`) |
+| `--dry-run` | — | bool | `false` | Render prompts without executing |
+| `--show-prompt` | — | bool | `false` | Print rendered prompts to stderr |
+| `--source-analysis-only` | — | bool | `false` | Run only the source analysis phase and exit |
+| `--max-duration` | — | duration | `12h` | Maximum swarm duration (0 = unlimited; deprecated alias `--swarm-duration`) |
+| `--profile` | — | string | — | Scanning profile to use |
+| `--only` | — | string | — | Run only this scanning phase |
+| `--skip` | — | []string | — | Skip specific phases |
+| `--start-from` | — | string | — | Resume from a specific phase |
 | `--instruction` | — | string | — | Custom instruction to guide the agent |
 | `--instruction-file` | — | string | — | Path to a file containing custom instructions |
-| `--master-batch-size` | — | int | `5` | Max records per master agent batch |
-| `--max-commands` | — | int | `50` | Max terminal commands per session |
-| `--max-iterations` | — | int | `3` | Maximum triage-rescan iterations |
+| `--discover` | — | bool | `false` | Run discovery+spidering before master agent planning |
+| `--code-audit` | — | bool | auto | Enable AI security code audit phase (on by default when `--source` is set) |
+| `--triage` | — | bool | `false` | Enable AI triage and rescan phases |
+| `--with-extensions` | — | bool | `false` | Force the extension agent to run even when the planner picks built-in modules |
+| `--batch-concurrency` | — | int | `0` | Max parallel master agent batches (0 = auto) |
 | `--max-master-retries` | — | int | `3` | Max master agent retries on parse failure |
-| `--max-plan-records` | — | int | `10` | Max records sent to plan agent |
-| `--max-probe-body` | — | int | `2097152` | Max response body size in bytes during probing (default 2MB) |
-| `--modules` | `-m` | []string | — | Explicit module names to include |
-| `--only` | — | string | — | Run only this scanning phase |
-| `--probe-concurrency` | — | int | `10` | Max parallel probe requests |
-| `--probe-timeout` | — | duration | `10s` | Per-request probe timeout |
-| `--profile` | — | string | — | Scanning profile to use |
-| `--record-uuid` | — | string | — | HTTP record UUID from database |
-| `--show-prompt` | — | bool | `false` | Print rendered prompts to stderr |
-| `--skip` | — | []string | — | Skip specific phases |
-| `--skip-sast` | — | bool | `false` | Skip native SAST tools |
-| `--source` | — | string | — | Path to application source code |
-| `--source-analysis-only` | — | bool | `false` | Run only the source analysis phase and exit |
-| `--start-from` | — | string | — | Resume from a specific phase |
 | `--sub-agent-concurrency` | — | int | `3` | Max parallel source analysis sub-agents |
-| `--swarm-duration` | — | duration | `12h` | Maximum swarm duration |
-| `--target` | `-t` | string | — | Target URL |
-| `--triage` | — | bool | `false` | Enable AI triage and rescan phases (disabled by default) |
-| `--vuln-type` | — | string | — | Vulnerability type focus |
+| `--max-plan-records` | — | int | `10` | Max records sent to plan agent (0 = no limit) |
+| `--master-batch-size` | — | int | `0` | Max records per master agent batch (0 = default 5) |
+| `--probe-concurrency` | — | int | `0` | Max parallel probe requests (0 = default 10) |
+| `--probe-timeout` | — | duration | `0` | Per-request probe timeout (0 = default 10s) |
+| `--max-probe-body` | — | int | `0` | Max response body size in bytes during probing (0 = default 2MB) |
+| `--browser` | — | bool | `false` | Enable agent-browser for browser-based auth capture |
+| `--browser-auth` | — | bool | `false` | Run browser-based auth phase before discovery (requires `--browser`) |
+| `--credentials` | — | string | — | Credentials for browser auth phase |
+| `--audit` | — | string | — | Run background vigolium-audit in parallel: `lite` (default if bare), `balanced`, `deep`. Requires `--source` |
+| `--piolium` | — | string | — | Run background piolium audit (Pi runtime): `lite`, `balanced`, `deep`, `longshot`, etc. Requires `--source`. Empty triggers auto-pick when `--audit` is also empty (piolium when `pi` is installed, else nothing) |
+| `--diff` | — | string | — | Focus on changed code: PR URL, git ref range, or `HEAD~N` |
+| `--last-commits` | — | int | `0` | Focus on last N commits |
+| `--intensity` | — | string | `balanced` | Scan intensity preset: `quick`, `balanced`, or `deep` |
+| `--upload-results` | — | bool | `false` | Upload scan results to cloud storage |
+| `--disable-guardrail` | — | bool | `false` | Skip the prompt-safety classifier on the natural-language prompt |
+
+---
+
+## Agent Olium Flags
+
+Flags specific to `vigolium agent olium` (and the top-level `vigolium olium` / `ol` alias). These are also the canonical names for the [shared olium provider override flags](#olium-provider-override-flags-shared) on every other agent subcommand.
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--provider` | — | string | from config | Provider: `openai-codex-oauth` \| `anthropic-api-key` \| `anthropic-oauth` \| `openai-api-key` \| `anthropic-cli` \| `google-vertex` |
+| `--model` | — | string | provider default | Model id |
+| `--oauth-cred` | — | string | from config | OAuth/SA credential file (openai-codex-oauth: `~/.codex/auth.json`; google-vertex: SA JSON or `$GOOGLE_APPLICATION_CREDENTIALS`) |
+| `--oauth-token` | — | string | from config | Claude Code OAuth bearer token (`anthropic-oauth`; falls back to `agent.olium.oauth_token` or `$ANTHROPIC_API_KEY`) |
+| `--llm-api-key` | — | string | from config | API key for key-based providers |
+| `--claude-bin` | — | string | `claude` | Path to the `claude` binary (anthropic-cli provider) |
+| `--gcp-project` | — | string | — | GCP project for `google-vertex` |
+| `--gcp-location` | — | string | — | GCP region for `google-vertex` |
+| `--system` | — | string | — | Override system prompt |
+| `--prompt` | `-p` | string | — | Run one prompt non-interactively and stream to stdout (skips TUI). Pass `-` to read from stdin |
+| `--stdin` | — | bool | `false` | Force reading prompt from stdin |
+
+---
+
+## Agent Piolium Flags
+
+Flags specific to `vigolium agent audit --driver=piolium`.
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--intensity` | — | string | `balanced` | Audit intensity preset: `quick`, `balanced`, `deep`. Explicit `--mode` / `--commit-depth` override |
+| `--mode` | — | string | (from intensity) | Audit mode: `lite`, `balanced`, `deep`, `revisit`, `confirm`, `merge`, `diff`, `longshot`, `status`, `smoke` |
+| `--source` | — | string | `.` | Local directory, git URL, `gs://<project>/<key>` archive, or local archive |
+| `--commit-depth` | — | int | `1` | `git clone --depth` value when `--source` is a git URL (0 = full history) |
+| `--no-stream` | — | bool | `false` | Don't echo agent output to the console (still written to `{session}/runtime.log`) |
+| `--upload-results` | — | bool | `false` | Upload session bundle to cloud storage after completion |
+| `--pi-provider` | — | string | — | Override pi's `defaultProvider` for this run (e.g. `vertex-anthropic`, `google-vertex`) |
+| `--pi-model` | — | string | — | Override pi's `defaultModel` for this run (e.g. `claude-opus-4-6`, `gemini-3.1-pro`) |
+| `--no-preflight` | — | bool | `false` | Skip the pre-audit pi roundtrip check |
+| `--preflight-timeout` | — | duration | `30s` | Pi preflight timeout |
+| `--plm-scan-limit` | — | int | `0` | [piolium] Cap commit-history scan to N commits (0 = piolium default) |
+| `--plm-scan-since` | — | string | — | [piolium] Cap commit-history scan to a `git --since` window (e.g. `"60 days ago"`) |
+| `--plm-phase-retries` | — | int | `0` | [piolium] Per-phase retry count |
+| `--plm-command-retries` | — | int | `0` | [piolium] Per-command retry count |
+| `--plm-longshot-limit` | — | int | `0` | [piolium] Max files hunted in `longshot` mode |
+| `--plm-longshot-timeout` | — | int | `0` | [piolium] Per-file kill timer in `longshot` mode (ms) |
+| `--plm-longshot-langs` | — | string | — | [piolium] Longshot language allowlist (comma-separated) |
+
+---
+
+## Agent Audit Flags
+
+Flags specific to `vigolium agent audit` — the unified driver dispatcher that drives the embedded **vigolium-audit** harness and/or **piolium** under one parent AgenticScan. (There is no separate `agent archon` command; the vigolium-audit leg is reached with `--driver=audit`.)
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--driver` | — | string | `auto` | Audit driver: `auto` (run audit; fall back to piolium only when the claude/codex CLI is missing), `both` (audit then piolium, unconditional), `audit`, or `piolium` |
+| `--intensity` | — | string | `balanced` | Audit intensity preset: `quick` (→ `lite`), `balanced` (→ `balanced`), `deep` (→ chain `deep,confirm`) |
+| `--mode` | — | string | (from intensity) | Single mode override. Shared (allowed under `auto`/`both`): `lite`, `balanced`, `deep`, `revisit`, `confirm`, `merge`. Driver-specific (require `--driver=audit\|piolium`): audit = `reinvest`/`refresh`/`mock`/`diff`/`status`, piolium = `longshot`/`smoke`/`diff`/`status` |
+| `--modes` | — | string | — | Run a chain of modes back-to-back, comma-separated (e.g. `deep,refresh,confirm`). Overrides `--mode`/`--intensity`; stops on the first non-complete mode. Per-driver, modes a driver can't run are skipped on that leg |
+| `--list-modes` | — | bool | `false` | Print the audit mode graph (phases, time estimates, descriptions) and exit |
+| `--source` | — | string | `.` | Local directory, git URL, `gs://<project>/<key>` archive, or local archive |
+| `--interactive` | `-i` | bool | `false` | Drop into the coding agent with the audit harness installed and drive it yourself (audit-only). Skips streaming, the AgenticScan row, and findings import — results land in `<source>/vigolium-results/`; import them afterward with `vigolium import`. Not valid with `--driver=piolium` |
+| `--commit-depth` | — | int | `1` | `git clone --depth` value when `--source` is a git URL (0 = full history) |
+| `--no-stream` | — | bool | `false` | Don't echo agent output (still written to `{session}/<driver>/runtime.log`) |
+| `--show-thinking` | — | bool | `false` | Render the agent's internal thinking blocks in the live stream (audit; verbose, off by default) |
+| `--keep-raw` | — | bool | `false` | [audit] Keep raw scanner output / draft findings under `<source>/vigolium-results/` (overrides deep/confirm auto-prune). No effect on the piolium leg |
+| `--upload-results` | — | bool | `false` | Upload parent session bundle (only when **all** participating drivers succeed) |
+| `--no-dedup` | — | bool | `false` | Skip the post-pass project-wide findings dedup |
+| `--provider` | — | string | — | [audit] Olium provider hint that selects the audit leg's agent: `anthropic-*` → claude, `openai-*` → codex (also forwards that provider's BYOK auth). Empty inherits `agent.olium.provider` |
+| `--agent` | — | string | — | [audit] Coding agent for the audit leg: `claude` or `codex`. Overrides the agent implied by `--provider` while keeping its auth (warns under `--driver=piolium`) |
+| `--api-key` | — | string | — | BYOK API key for the run (literal, `$ENV_NAME`, or `@path`). claude→`ANTHROPIC_API_KEY`, codex→`OPENAI_API_KEY`. Mutually exclusive with `--oauth-token`/`--oauth-cred-file` |
+| `--oauth-token` | — | string | — | BYOK Anthropic OAuth bearer token (claude only; from `claude setup-token`). Mutually exclusive with `--api-key`/`--oauth-cred-file` |
+| `--oauth-cred-file` | — | string | — | BYOK OAuth credential file path (codex `~/.codex/auth.json` shape). Mutually exclusive with `--api-key`/`--oauth-token` |
+| `--pi-provider` | — | string | — | [piolium] Override pi's `defaultProvider` |
+| `--pi-model` | — | string | — | [piolium] Override pi's `defaultModel` |
+| `--no-preflight` | — | bool | `false` | Skip the pre-audit roundtrip checks for both drivers |
+| `--preflight-timeout` | — | duration | `30s` | Per-driver preflight timeout |
+| `--plm-*` | — | various | — | [piolium] passthroughs — same set as [Agent Piolium Flags](#agent-piolium-flags). Ignored when `--driver=audit` |
 
 ---
 
@@ -334,8 +418,50 @@ Flags specific to `vigolium agent session`.
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--limit` | `-n` | int | `50` | Maximum number of records to display |
-| `--mode` | — | string | — | Filter by mode (query, autopilot, pipeline, swarm) |
+| `--mode` | — | string | — | Filter by mode (query, autopilot, swarm, audit, piolium) |
 | `--offset` | `-o` | int | `0` | Number of records to skip |
+| `--tail` | — | int | `50` | Number of raw output lines to show in detail view (0 = none, -1 = all) |
+| `--full` | — | bool | `false` | Show full raw output (shortcut for `--tail -1`) |
+| `--tui` / `--no-tui` | — | bool | — | Enable / force-disable interactive TUI picker |
+
+---
+
+## Olium Provider Override Flags (shared)
+
+Per-run overrides accepted on `agent query`, `agent autopilot`, `agent swarm`, and `agent olium` (and the top-level `vigolium olium` / `ol`). Each falls back to the matching `agent.olium.*` config field, then to the documented env var.
+
+| Flag | Type | Falls back to | Description |
+|------|------|---------------|-------------|
+| `--provider` | string | `agent.olium.provider` (default `openai-compatible`) | Olium provider: `openai-compatible` \| `openai-codex-oauth` \| `anthropic-api-key` \| `anthropic-oauth` \| `openai-api-key` \| `anthropic-cli` \| `anthropic-vertex` \| `google-vertex` |
+| `--model` | string | `agent.olium.model` (default `gemma4:latest`) | Model id |
+| `--oauth-cred` | string | `agent.olium.oauth_cred_path` or `$GOOGLE_APPLICATION_CREDENTIALS` | OAuth/SA credential file (openai-codex-oauth, anthropic-vertex, or google-vertex) |
+| `--oauth-token` | string | `agent.olium.oauth_token` or `$ANTHROPIC_API_KEY` | Claude Code OAuth bearer token (`anthropic-oauth`) |
+| `--llm-api-key` | string | `agent.olium.llm_api_key` or provider env var (`$ANTHROPIC_API_KEY`/`$OPENAI_API_KEY`) | API key for key-based providers |
+| `--gcp-project` | string | `$GOOGLE_CLOUD_PROJECT` > `agent.olium.google_cloud_project` > SA file's `project_id` | GCP project for `anthropic-vertex` / `google-vertex` |
+| `--gcp-location` | string | `$GOOGLE_CLOUD_LOCATION` > `agent.olium.google_cloud_location` > `us-central1` | GCP region for `anthropic-vertex` / `google-vertex` |
+| `--system-prompt` | string | — | Replace the built-in system prompt with this value (autopilot only) |
+| `--system-prompt-file` | string | — | Path to a file whose contents replace the built-in system prompt; takes precedence over `--system-prompt` (autopilot only) |
+| `--system` | string | — | Replace the system prompt (`agent olium` TUI only) |
+
+---
+
+## Log Flags
+
+Flags specific to `vigolium log` and `vigolium log ls`.
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--tail` | `-n` | int | `200` | Show the last N lines (0 = none, -1 = all) |
+| `--full` | — | bool | `false` | Show the full log (shortcut for `--tail -1`) |
+| `--follow` | `-f` | bool | `false` | Follow log output as it is written. Auto-enabled when the session is still running unless `--follow=false` is set |
+| `--strip-ansi` | — | bool | `false` | Strip ANSI color codes from output |
+| `--tui` / `--no-tui` | — | bool | — | Enable / force-disable the interactive picker |
+
+---
+
+## Import Flags
+
+`vigolium import <path>` has no additional flags beyond the global project/JSON flags. Path may be an audit output folder (a `vigolium-results/` directory with `audit-state.json` + `findings-draft/`) or a JSONL export (file).
 
 ---
 
@@ -505,6 +631,52 @@ DB stats flags.
 
 ---
 
+## Storage Flags
+
+Flags for the `vigolium storage <subcommand>` family. All require `storage.enabled: true` in `vigolium-configs.yaml` (or `VIGOLIUM_STORAGE_ENABLED=true`) plus driver/bucket/access-key/secret-key configured. Operations are scoped to the active project.
+
+### storage ls
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--prefix` | string | — | Limit results to keys under this prefix |
+| `--tree` | bool | `false` | Render objects as a directory tree |
+| `--json` | bool | `false` | Output as JSON |
+
+### storage upload
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--key` | string | `ugc/<basename>` | Object key |
+| `--content-type` | string | — | Content-Type to set on the object |
+
+### storage download
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--output` | `-o` | string | — | Write to this file instead of stdout |
+
+### storage results
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--output` | `-o` | string | `results-<uuid>.tar.gz` | Write to this file |
+
+### storage presign
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--key` | string | — | Object key (required) |
+| `--method` | string | `GET` | HTTP method: `GET` or `PUT` |
+| `--expiry` | duration | `1h` | URL validity duration |
+| `--json` | bool | `false` | Output as JSON `{url, key, method, expiry_seconds}` |
+
+### storage rm
+
+Takes one or more `<key>` positional args. Honors the global `--force` / `-F` to skip the typed-`yes` confirmation.
+
+---
+
 ## Export Flags
 
 Top-level `vigolium export` flags.
@@ -513,7 +685,7 @@ Top-level `vigolium export` flags.
 |------|-------|------|---------|-------------|
 | `--format` | — | string | `jsonl` | Format: html, jsonl |
 | `--limit` | — | int | `0` | Max records per table |
-| `--lite` | — | bool | `false` | Export summary fields only, omit raw HTTP data and headers |
+| `--omit-response` | — | bool | `false` | Omit raw HTTP request/response bytes (keeps metadata, smaller files) |
 | `--only` | — | []string | all | Export only these tables (repeatable: http, findings, scans, modules, oast, source-repos, scopes) |
 | `--output` | `-o` | string | — | Output file |
 | `--search` | — | string | — | Fuzzy search filter |
