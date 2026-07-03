@@ -25,10 +25,17 @@ Run a full vulnerability scan pipeline. Supports multiple targets, input formats
 | `--output` | `-o` | string | — | Write findings to specified output file |
 | `--stats` | — | bool | `false` | Show live progress stats during scanning |
 | `--include-response` | — | bool | `false` | Include full HTTP response body in output |
+| `--omit-response` | — | bool | `false` | Omit raw request/response bytes (smaller files; drops the `.resp.*` files under `--format fs`) |
+| `--fail-on` | — | string | — | Exit non-zero when a finding at/above this severity is present (`info`,`suspect`,`low`,`medium`,`high`,`critical`); output written first, `--soft-fail` overrides |
+| `--split-by-host` | — | bool | `false` | Stateless multi-target (`-S -T file`): write per-host output files (`base-<host>.<ext>`); required for `-P > 1` fan-out; no-op for `--format fs` |
 | `--stateless` | — | bool | `false` | Use a temporary database, export results to `--output`, then discard |
 | `--upload-results` | — | bool | `false` | Upload scan results to cloud storage after completion (requires storage config) |
 
-Stateless mode is great for ephemeral CI/CD runs — it creates a temp SQLite file, runs the full scan against it, writes the export/report to `--output`, then deletes the DB (including WAL/SHM sidecars). Requires `--output`; mutually exclusive with `--db`. Combine with `--format jsonl` or `--format html` for shareable artifacts.
+Stateless mode is great for ephemeral CI/CD runs — it creates a temp SQLite file, runs the full scan against it, writes the export/report to `--output`, then deletes the DB (including WAL/SHM sidecars). Requires `--output`; mutually exclusive with `--db`. Combine with `--format jsonl`, `--format html`, `--format fs`, or `--format sqlite` for shareable artifacts (`sqlite` requires `-S`).
+
+`--format` accepts `console` (default), `jsonl`, `html`, `sqlite`, and `fs` (comma-separated for multiple):
+- **`fs`** — a flat, browsable tree (`<base>-traffic/` + `<base>-findings/`) with per-host `.req` / `.resp.headers` / `.resp.body` / `.md` files and a jq-friendly `index.json`. No `-o` → `vigolium-traffic/` + `vigolium-findings/`. Works with or without `-S`. `--omit-response` drops the `.resp.*` files.
+- **`sqlite`** (aliases `sqlite3`, `db`) — dumps the standalone per-run DB to `<output>.sqlite` via `VACUUM INTO`. Requires `-S/--stateless` + `-o`. Reopen with `vigolium finding/traffic -S --db <file>.sqlite`.
 
 ### Request flags (scan & run)
 
@@ -129,6 +136,15 @@ vigolium scan -t https://example.com --format jsonl -o results.jsonl
 
 # HTML report
 vigolium scan -t https://example.com --format html -o report.html
+
+# Filesystem tree (run-traffic/ + run-findings/) — browsable with ls/grep/jq
+vigolium scan -t https://example.com --format fs -o run
+
+# Standalone per-run SQLite DB (requires -S)
+vigolium scan -t https://example.com -S --format sqlite -o run.sqlite
+
+# Fail the pipeline on any high/critical finding
+vigolium scan -t https://example.com --fail-on high
 
 # With proxy
 vigolium scan -t https://example.com --proxy http://127.0.0.1:8080
@@ -373,6 +389,18 @@ The following phases can be used with `--only` and `--skip`:
 - `--format html` requires `-o/--output`
 - In `scan` mode with `--only`, HTML is only supported for `discovery` and `spidering` phases
 - The `export` command supports HTML for all data
+
+### Filesystem & SQLite Format Constraints
+
+- `--format fs` writes two sibling dirs off the `-o` base (`<base>-traffic/` + `<base>-findings/`); with no `-o` it defaults to `vigolium-traffic/` + `vigolium-findings/` in the cwd. Available on `scan` / `scan-url` / `scan-request` / `run`, `export`, and `db export`. `--split-by-host` is a no-op (fs already splits per host). For `scan-url` / `scan-request`, pass `-o`, `-S`, or a phase flag so the request routes through the runner that writes the tree
+- `--format sqlite` requires `-S/--stateless` **and** `-o/--output`; aliases `sqlite3` / `db`. Under `--split-by-host` each file is `<base>-<host>.sqlite`. Reopen with `vigolium finding/traffic -S --db <file>.sqlite`
+
+### Exit-Code Gating
+
+- `--fail-on <sev>` (`scan` / `run` / `scan-url` / `scan-request`) makes the command exit non-zero when a finding at/above `<sev>` was produced. Accepted (ascending): `info`, `suspect`, `low`, `medium`, `high`, `critical`
+- Output is always written first; the gate fires afterward
+- `--soft-fail` (global) forces exit 0 even when the gate (or any other error) trips
+- Under `-P` / `--split-by-host` the gate is evaluated per child; the parent batch exits non-zero only when every target fails
 
 ### SAST Constraints
 

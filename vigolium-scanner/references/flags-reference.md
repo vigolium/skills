@@ -23,6 +23,7 @@ Alphabetical index of all vigolium CLI flags across all commands.
 - [Import Flags](#import-flags)
 - [Finding Flags](#finding-flags)
 - [Traffic Flags](#traffic-flags)
+- [Replay Flags](#replay-flags)
 - [DB Flags](#db-flags)
 - [Storage Flags](#storage-flags)
 - [Export Flags](#export-flags)
@@ -48,13 +49,14 @@ Persistent flags available on every command.
 | `--ext` | — | []string | — | Load JavaScript extension script (repeatable) |
 | `--ext-dir` | — | string | — | Override extension scripts directory |
 | `--force` | `-F` | bool | `false` | Skip confirmation prompts |
-| `--format` | — | string | `console` | Output format: console, jsonl, html |
+| `--format` | — | string | `console` | Output format (comma-separated for multiple): console, jsonl, html, `sqlite` (needs `-S`), `fs` (flat traffic/finding tree) |
 | `--full-example` | — | bool | `false` | Show full example commands |
 | `--heuristics-check` | — | string | `basic` | Pre-scan heuristics level: none, basic, advanced |
 | `--input` | `-i` | string | `-` | Input file path or spec (use - for stdin) |
 | `--input-mode` | `-I` | string | `urls` | Input format: urls, openapi, swagger, burp, curl, nuclei, har |
 | `--input-read-timeout` | — | duration | `3m` | Timeout for reading input |
-| `--json` | `-j` | bool | `false` | Format output as JSONL (one JSON object per line) |
+| `--json` | `-j` | bool | `false` | On `scan`: JSONL findings. On `finding`/`traffic`/`db`: a single compact, token-aware agent JSON object (bodies preview-capped, findings get a `response_evidence` snippet) |
+| `--soft-fail` | — | bool | `false` | Always exit 0, even when a command fails (error still printed to stderr); overrides `--fail-on` |
 | `--ci-output-format` | — | bool | `false` | CI-friendly output: JSONL findings only, no color, no banners |
 | `--list-input-mode` | — | bool | `false` | List supported input modes |
 | `--list-modules` | `-M` | bool | `false` | List scanner modules |
@@ -110,6 +112,7 @@ Flags specific to `vigolium scan` and `vigolium run`.
 | `--discover` | — | bool | `false` | Enable content discovery phase before scanning |
 | `--discover-max-time` | — | duration | `1h` | Discovery timeout per target |
 | `--external-harvest` | — | bool | `false` | Enable external intelligence gathering phase (Wayback, CT logs, etc.) |
+| `--fail-on` | — | string | — | Exit non-zero when a finding at/above this severity is present (`info`,`suspect`,`low`,`medium`,`high`,`critical`); output written first, `--soft-fail` overrides, per-child under `-P` |
 | `--header` | `-H` | []string | — | Add custom HTTP header (repeatable, e.g. -H 'Auth: Bearer token') |
 | `--headless` | — | bool | `true` | Headless browser mode |
 | `--include-response` | — | bool | `false` | Include full HTTP response body in output |
@@ -129,6 +132,7 @@ Flags specific to `vigolium scan` and `vigolium run`.
 | `--skip-format-validation` | — | bool | `false` | Skip validation of input file format |
 | `--spider` | — | bool | `false` | Enable browser-based spidering phase before scanning |
 | `--spider-max-time` | — | duration | `30m` | Spidering timeout |
+| `--split-by-host` | — | bool | `false` | In stateless multi-target mode (`-S -T file`), write a separate per-host output file (`base-<host>.<ext>`); required for `-P > 1` fan-out; no-op for `--format fs` |
 | `--stateless` | — | bool | `false` | Use a temporary database, export results to --output, then discard |
 | `--stats` | — | bool | `false` | Show live progress stats during scanning |
 | `--stream` | — | bool | `false` | Process targets as a stream without buffering or deduplication |
@@ -147,6 +151,7 @@ Flags specific to `vigolium scan-url`.
 | `--body` | — | string | — | Request body |
 | `--discover` | — | bool | `false` | Run content discovery before scanning |
 | `--external-harvest` | — | bool | `false` | Run external intelligence harvesting before scanning |
+| `--fail-on` | — | string | — | Exit non-zero when a finding at/above this severity is present (`info`,`suspect`,`low`,`medium`,`high`,`critical`); `--soft-fail` overrides |
 | `--header` | `-H` | []string | — | Custom header (repeatable) |
 | `--known-issue-scan` | — | bool | `false` | Run known issue scan (Nuclei/Kingfisher) |
 | `--method` | — | string | `GET` | HTTP method |
@@ -164,6 +169,7 @@ Flags specific to `vigolium scan-request`.
 |------|-------|------|---------|-------------|
 | `--discover` | — | bool | `false` | Run content discovery before scanning |
 | `--external-harvest` | — | bool | `false` | Run external intelligence harvesting before scanning |
+| `--fail-on` | — | string | — | Exit non-zero when a finding at/above this severity is present (`info`,`suspect`,`low`,`medium`,`high`,`critical`); `--soft-fail` overrides |
 | `--input` | `-i` | string | `-` | Input file or - for stdin |
 | `--known-issue-scan` | — | bool | `false` | Run known issue scan |
 | `--no-insertion-points` | — | bool | `false` | Skip insertion point testing |
@@ -186,6 +192,7 @@ Flags specific to `vigolium server`.
 | `--host` | — | string | `0.0.0.0` | Bind address for the API server |
 | `--ingest-proxy-port` | — | int | `0` | Transparent HTTP proxy port for recording traffic (0 = disabled) |
 | `--mem-buffer` | — | int | `10000` | In-memory queue capacity before spilling to disk |
+| `--mirror-fs` | — | string | — | Mirror ingested traffic + findings to a live flat file tree under this dir (`<dir>/traffic`, `<dir>/findings`), in addition to the DB (config `server.mirror_fs_path`) |
 | `--no-agent` | — | bool | `false` | Disable all agent endpoints and warm session pooling |
 | `--no-auth` | `-A` | bool | `false` | Run server without API key authentication |
 | `--output` | `-o` | string | — | Write findings to specified output file |
@@ -492,6 +499,8 @@ Flags specific to `vigolium finding` (aliases: `findings`).
 | `--module-type` | — | string | — | Filter by module type (active, passive, nuclei, secret-scan, agent, source-tools, oast, extension) |
 | `--finding-source` | — | string | — | Filter by finding source (audit, spa, agent, oast, source-tools, extension) |
 | `--id` | — | int | `0` | Filter by finding ID |
+| `--min-severity` | — | string | — | Show findings at/above this severity (`info`,`suspect`,`low`,`medium`,`high`,`critical`); ignored when `--severity` is set |
+| `--agentic-scan` | — | string | — | Findings from an agent run; one root UUID expands to the whole run tree (audit driver legs / swarm sub-runs) |
 
 ### Finding display flags
 
@@ -501,6 +510,20 @@ Flags specific to `vigolium finding` (aliases: `findings`).
 | `--burp` | bool | `false` | Display in Burp Suite-style format (colored request/response) |
 | `--columns` | []string | — | Columns to show (comma-separated, e.g. ID,SEVERITY,MODULE) |
 | `--exclude-columns` | []string | — | Columns to hide (comma-separated) |
+
+### Agent JSON flags (shared by `finding`, `traffic`, `db ls`)
+
+With `-j`/`--json`, the read commands emit **one compact, token-aware object** (not the bulk export stream). These shape it:
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--json` | `-j` | bool | `false` | Emit the single compact object instead of a table |
+| `--compact` | — | bool | `false` | Metadata only — drop request/response bodies and evidence snippets |
+| `--fields` | — | []string | — | Project only these top-level JSON keys (comma-separated) |
+| `--full-body` | — | bool | `false` | Complete bodies — no preview caps, no binary/static stubbing, no hashing |
+| `--with-records` | — | bool | `false` | **finding only** — embed each finding's linked HTTP records as a `records:[…]` triage bundle |
+
+`db stats -j` is the exception — it emits its raw stats struct, not the compact view, and does not accept these shaping flags.
 
 ### Finding available columns
 
@@ -541,11 +564,78 @@ Display-only flags.
 | `--raw` | bool | `false` | Raw HTTP output |
 | `--tree` | bool | `false` | Display as host/path hierarchy tree |
 
+Traffic also accepts the shared [Agent JSON flags](#agent-json-flags-shared-by-finding-traffic-db-ls) with `-j`/`--json`: `--compact`, `--fields a,b,c`, `--full-body`.
+
 Traffic replay flag.
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--in-replace` | bool | `false` | Replace stored response |
+
+---
+
+## Replay Flags
+
+Flags for the top-level `vigolium replay` command (mutate a stored/supplied
+request and diff baseline vs replay; the CLI surface of the in-process
+`replay_request` tool). See also `traffic --replay` for verbatim bulk replay.
+
+Source (exactly one, or a bulk selector below):
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--record-uuid` | `-u` | string | — | Stored HTTP record UUID to use as baseline |
+| `--finding-id` | — | int | — | Replay the finding's linked record (or its stored evidence) |
+| `--input` | `-i` | string | — | Raw input: curl, raw HTTP, Burp XML, base64, URL, or `-` for stdin |
+| `--input-file` | — | string | — | Read `--input` value from a file |
+
+Mutation / request override:
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--mutate` | `-m` | []string | — | Insertion-point mutation `name=...,payload=...` or `name:type:payload` (repeatable) |
+| `--raw-request` | — | string | — | Full raw HTTP request override (mutually exclusive with `--mutate`) |
+| `--raw-request-file` | — | string | — | Read `--raw-request` from a file |
+| `--header` | `-H` | []string | — | Extra request header `Name: value` (repeatable, overrides baseline) |
+| `--auth-session` | — | string | — | Auth session name to merge headers from (`vigolium auth list`) |
+
+Session / network:
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--session-id` | — | string | — | Persist cookies across calls under `~/.vigolium/replay-jars/<id>.json` |
+| `--no-cookies` | — | bool | `false` | Don't carry cookies (overrides `--session-id`) |
+| `--no-redirects` | — | bool | `false` | Don't follow 30x redirects |
+| `--target` | `-t` | string | — | Override scheme/host/port (e.g. `https://staging.example.com`) |
+| `--timeout` | — | duration | `30s` | Per-request timeout |
+
+Result handling:
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--in-replace` | — | bool | `false` | When the source is a stored record, update its stored response with the replay |
+| `--output` | `-o` | string | — | Write JSON result to this file (default: stdout) |
+| `--pretty` | — | bool | `false` | Human-readable summary instead of JSON |
+
+Bulk selection — setting `--all` or any of these switches replay into "iterate
+the matching stored records" mode (mutually exclusive with the single-source
+flags above). Results stream as JSONL, one object per record; `--mutate` is
+applied to every record that has that insertion point. Pair with `-S/--stateless`
++ `--db` to replay a standalone `.sqlite`/`.jsonl` export (project scoping off).
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--all` | `-a` | bool | `false` | Replay every matched stored record (lifts the `-n/--limit` cap) |
+| `--host` | — | string | — | Filter records by hostname pattern (wildcard supported) |
+| `--method` | — | []string | — | Filter records by HTTP method (repeatable) |
+| `--status` | — | []int | — | Filter records by stored status code (repeatable) |
+| `--path` | — | string | — | Filter records by URL path pattern |
+| `--source` | — | string | — | Filter records by source (scanner, ingest-cli, ingest-proxy, seed, ...) |
+| `--search` | — | string | — | Fuzzy-search records across URLs, paths, and hostnames |
+| `--body` | — | string | — | Filter records whose request/response body contains this text |
+| `--limit` | `-n` | int | `100` | Max records to replay (use `--all` to lift the cap) |
+| `--concurrency` | `-c` | int | `10` | Concurrent replays; keep low to avoid overwhelming an intercepting proxy like Burp |
+| `--stateless` | `-S` | bool | `false` | Read records from `--db` (a `.jsonl` export or standalone `.sqlite`) with project scoping off |
 
 ---
 
@@ -587,11 +677,13 @@ DB list flags.
 | `--to` | — | string | — | Show records created before this date |
 | `--tree` | — | bool | `false` | Display results in hierarchical tree format |
 
+`db ls` also accepts the shared [Agent JSON flags](#agent-json-flags-shared-by-finding-traffic-db-ls) with `-j`/`--json`: `--compact`, `--fields a,b,c`, `--full-body` (all tables except `db stats`).
+
 DB export flags.
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--format` | `-f` | string | `jsonl` | Export format: jsonl, json, raw, csv, markdown, markdown-table |
+| `--format` | `-f` | string | `jsonl` | Export format: jsonl, json, raw, csv, markdown, markdown-table, `fs` (flat traffic/finding tree) |
 | `--from` | — | string | — | Export records created after this date |
 | `--host` | — | string | — | Filter records by hostname pattern |
 | `--limit` | — | int | `0` | Maximum number of records to export (0 = unlimited) |
@@ -683,7 +775,7 @@ Top-level `vigolium export` flags.
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--format` | — | string | `jsonl` | Format: html, jsonl |
+| `--format` | — | string | `jsonl` | Format: jsonl, html, `fs` (flat traffic/finding tree) |
 | `--limit` | — | int | `0` | Max records per table |
 | `--omit-response` | — | bool | `false` | Omit raw HTTP request/response bytes (keeps metadata, smaller files) |
 | `--only` | — | []string | all | Export only these tables (repeatable: http, findings, scans, modules, oast, source-repos, scopes) |

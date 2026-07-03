@@ -28,6 +28,7 @@ Start the API server with Swagger UI, ingestion endpoints, and optional scan-on-
 | `--host` | — | string | `0.0.0.0` | Bind address for the API server |
 | `--ingest-proxy-port` | — | int | `0` (disabled) | Transparent HTTP proxy port for recording traffic |
 | `--mem-buffer` | — | int | `10000` | In-memory queue capacity before spilling to disk |
+| `--mirror-fs` | — | string | — | Mirror ingested traffic + findings to a live flat file tree under this dir (`<dir>/traffic`, `<dir>/findings`), in addition to the DB (config `server.mirror_fs_path`) |
 | `--no-agent` | — | bool | `false` | Disable all agent endpoints and warm session pooling |
 | `--no-auth` | `-A` | bool | `false` | Run server without API key authentication |
 | `--output` | `-o` | string | — | Write findings to specified output file |
@@ -69,7 +70,20 @@ vigolium server --ingest-proxy-port 8080
 
 # High concurrency server
 vigolium server -c 200 --mem-buffer 50000
+
+# Mirror ingested traffic + findings to a live browsable file tree
+vigolium server --ingest-proxy-port 8080 --mirror-fs ./mirror
 ```
+
+### Live Filesystem Mirror (`--mirror-fs`)
+
+`--mirror-fs <dir>` (config `server.mirror_fs_path`) mirrors every saved HTTP record and finding to `<dir>/traffic/` + `<dir>/findings/` as they are persisted — in addition to the database — so an external agent can read ingested Burp/proxy traffic as files in real time (`ls`/`grep`/`jq`).
+
+- **Same layout as `--format fs`**: per-host subdirs with `0001.req` (a leading `@target <scheme>://<authority>` line then the raw request), `0001.resp.headers`, `0001.resp.body` (gzip-decoded), and `0001.md` for findings cross-linked to their `.req`.
+- **Append-only index**: writes `<root>/traffic/index.jsonl` + `<root>/findings/index.jsonl` (one JSON object per line), vs the one-shot export's single `index.json` array.
+- **Non-blocking**: a background goroutine handles all disk I/O and never blocks the DB save path (the buffer drops jobs with a warning if it overflows — the database is unaffected).
+- **Resumes across restarts**: per-host id numbering continues from the highest existing `.req`/`.md` file.
+- **Server-ingestion-only**: wired via the repository's `OnRecordSaved`/`OnFindingSaved` callbacks, which fire only on genuinely new inserts (deduplicated saves do not). CLI scans and other repo users are unaffected. Setup is best-effort — a failure logs a warning and the server continues without it.
 
 ### REST API Endpoints
 
@@ -178,6 +192,8 @@ Browse stored HTTP traffic. Shortcut for `vigolium db ls --table http_records`.
 | `--columns` | []string | — | Columns to show (comma-separated, e.g. HOST,METHOD,PATH,STATUS) |
 | `--exclude-columns` | []string | — | Columns to hide (comma-separated) |
 
+With `-j`/`--json`, `traffic` emits **one compact, token-aware object** (headers kept, bodies preview-capped, binary/static stubbed) built for coding-agent consumption. Shape it with `--compact` (metadata only), `--fields a,b,c` (project top-level keys), or `--full-body` (complete bodies) — the same contract as `finding`/`db ls`. See SKILL.md recipe 14c.
+
 ### Available Columns
 
 UUID, HOST, METHOD, PATH, STATUS, TIME, SIZE, WORDS, CONTENT_TYPE, SENT_AT, TITLE, AUTH, STATUS_PHRASE, REQ_HEADERS, RESP_HEADERS, SOURCE, REMARKS
@@ -227,8 +243,19 @@ vigolium traffic --columns HOST,METHOD,PATH,STATUS,AUTH
 **Usage:** `vigolium traffic [search-term] --replay [flags]`
 
 Re-send the matched stored requests and compare original vs new responses. This
-is a mode of the `traffic` command (the old `traffic replay` subcommand was
-removed), so it inherits all the `traffic` filter flags.
+is a mode of the `traffic` command (a flag, not a subcommand — there is no
+`traffic replay` subcommand; a bare `replay` argument is treated as a fuzzy
+search term), so it inherits all the `traffic` filter flags.
+
+> **Bulk replay, two ways.** `traffic --replay` re-sends records **verbatim** and
+> prints a human comparison table — a firehose for pushing captured traffic at a
+> proxy. The top-level `vigolium replay --all` selects the same filtered record
+> set but runs each record through the mutation/diff engine and streams **stable
+> JSONL** (baseline/replay/diff per record), and can apply a `--mutate` payload
+> across the whole batch. Use `traffic --replay` to eyeball/intercept traffic;
+> use `replay --all` when you want structured diffs, payload reflection, or a
+> batch fuzz. `--with-browser` is only on `traffic --replay`. See the `replay`
+> guide in SKILL.md §14 (step 7) for the bulk flag set.
 
 ### replay-specific flags
 

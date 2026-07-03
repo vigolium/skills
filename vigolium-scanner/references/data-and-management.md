@@ -273,7 +273,7 @@ Export database records in various formats.
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--format` | `-f` | string | `jsonl` | Export format: jsonl, json, raw, csv, markdown, markdown-table |
+| `--format` | `-f` | string | `jsonl` | Export format: jsonl, json, raw, csv, markdown, markdown-table, `fs` (flat traffic/finding tree, honors these filters) |
 | `--output` | `-o` | string | stdout | Output file path |
 | `--host` | — | string | — | Filter by hostname pattern |
 | `--method` | — | []string | — | Filter by HTTP method |
@@ -295,6 +295,7 @@ vigolium db export -f jsonl -o records.jsonl
 vigolium db export -f csv -o records.csv --host example.com
 vigolium db export -f markdown -o report.md
 vigolium db export -f raw --request-only -o requests.txt
+vigolium db export --format fs -o run --host example.com
 vigolium db export --uuid abc12345
 ```
 
@@ -371,6 +372,8 @@ Browse vulnerability findings with fuzzy search, filtering, raw display, and col
 | `--module-type` | — | string | — | Filter by module type (active, passive, nuclei, secret-scan, agent, source-tools, oast, extension) |
 | `--finding-source` | — | string | — | Filter by finding source (audit, spa, agent, oast, source-tools, extension) |
 | `--id` | — | int | `0` | Filter by finding ID |
+| `--min-severity` | — | string | — | Show findings at/above this severity (`info`,`suspect`,`low`,`medium`,`high`,`critical`); ignored when `--severity` is set |
+| `--agentic-scan` | — | string | — | Findings from an agent run; one root UUID expands to the whole run tree (audit driver legs / swarm sub-runs) |
 
 ### Display flags
 
@@ -394,6 +397,20 @@ Browse vulnerability findings with fuzzy search, filtering, raw display, and col
 
 Also accepts: `--host`, `--method`, `--status`, `--path`, `--from`, `--to`, `--search`, `--header`, `--body`, `--source`.
 
+### Agent JSON output flags
+
+With `-j`/`--json`, `finding` emits **one compact, token-aware object** (bodies preview-capped at ~2 KiB, binary/static stubbed, each finding gets a ±240-char `response_evidence` snippet) instead of a table:
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--json` | `-j` | bool | `false` | Emit the compact agent object (global flag) |
+| `--compact` | — | bool | `false` | Metadata only — drop bodies and evidence snippets |
+| `--fields` | — | []string | — | Project only these top-level JSON keys (comma-separated) |
+| `--full-body` | — | bool | `false` | Complete bodies — no preview caps, no binary/static stubbing |
+| `--with-records` | — | bool | `false` | Embed each finding's linked HTTP records as a `records:[…]` triage bundle |
+
+`--compact`, `--fields`, and `--full-body` are shared with `traffic` and `db ls`; `--with-records`, `--min-severity`, and `--agentic-scan` are finding-only. See SKILL.md recipe 14c.
+
 ### Available columns
 
 ID, SEVERITY, CONFIDENCE, MODULE, MODULE_ID, SHORT_DESC, DESCRIPTION, TYPE, SOURCE, MATCHED_AT, FOUND_AT, SCAN_UUID, TAGS
@@ -414,6 +431,8 @@ vigolium finding --raw
 vigolium finding --columns ID,SEVERITY,MODULE,MATCHED_AT,TAGS
 vigolium finding --sort severity --asc
 vigolium finding --watch 5s
+vigolium finding -j --min-severity high --with-records
+vigolium finding -j --agentic-scan 550e8400-e29b-41d4-a716-446655440000
 ```
 
 ---
@@ -437,13 +456,13 @@ cat findings.jsonl | vigolium finding load
 
 **Usage:** `vigolium export [flags]`
 
-Top-level export command. Exports database tables and module registry as JSONL or HTML.
+Top-level export command. Exports database tables and module registry as JSONL, HTML, or a flat filesystem tree (`fs`).
 
 ### export flags
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--format` | — | string | `jsonl` | Export format: html, jsonl |
+| `--format` | — | string | `jsonl` | Export format: jsonl, html, `fs` (flat traffic/finding tree → `<base>-traffic/` + `<base>-findings/`) |
 | `--output` | `-o` | string | — | Output file (required for html) |
 | `--only` | — | []string | all | Export only these tables (repeatable: http, findings, scans, modules, oast, source-repos, scopes) |
 | `--omit-response` | — | bool | `false` | Omit raw HTTP request/response bytes from output (keeps metadata, smaller files) |
@@ -457,6 +476,7 @@ vigolium export --format jsonl -o full-export.jsonl
 vigolium export --format jsonl --only findings
 vigolium export --format jsonl --only findings,http
 vigolium export --format html -o report.html
+vigolium export --format fs -o run
 vigolium export --only modules
 vigolium export --omit-response --only http -o urls.jsonl
 vigolium export --search "example.com" -o filtered.jsonl

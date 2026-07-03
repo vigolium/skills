@@ -10,7 +10,7 @@ description: >-
   scripting, export, project management, and configuration tuning.
 license: MIT
 metadata:
-  version: "3.3.0"
+  version: "3.4.0"
   domain: security-tooling
   triggers: >-
     vigolium, scan, scan-url, scan-request, run, ingest, server, agent, agent query,
@@ -24,7 +24,10 @@ metadata:
     vigolium js, intensity, diff scan, last commits, stateless scan,
     upload results, runtime log, session log, google-vertex, gcp-project,
     gcp-location, vertex provider, anthropic-vertex, claude-on-vertex, gemini,
-    openai-compatible, ollama, audit driver
+    openai-compatible, ollama, audit driver, fs format, filesystem export,
+    fs tree, sqlite export, mirror-fs, live mirror, fail-on, soft-fail,
+    split-by-host, exit code gating, compact json, agent json, with-records,
+    min-severity, agentic-scan, coding agent
   role: operator
   scope: usage
   output-format: commands
@@ -118,9 +121,17 @@ Use this to find the right command quickly:
 | Replay a finding's HTTP evidence with a payload | `vigolium replay --finding-id 42 -m 'name=q,payload=<svg/onload=alert(1)>'` |
 | Replay an arbitrary curl/raw/burp/base64/URL input | `vigolium replay -i "curl -X POST <url> -d '...'"` |
 | Persist cookies across replays (multi-step auth) | `vigolium replay --session-id login --record-uuid <uuid>` |
+| Bulk-replay every matched record through the diff engine (JSONL out) | `vigolium replay --all --proxy http://127.0.0.1:8080 -c 5` |
+| Bulk-replay a standalone export through Burp (project scoping off) | `vigolium replay -S --db scan.sqlite --all --proxy http://127.0.0.1:8080` |
 | Filter findings by module type or source | `vigolium finding --module-type active --finding-source audit` |
 | View database statistics | `vigolium db stats` |
 | Export results to JSONL/HTML | `vigolium export --format jsonl -o results.jsonl` |
+| Export a browsable file tree (traffic + findings as files) | `vigolium scan -t <url> --format fs -o run` |
+| Export the run's standalone SQLite DB | `vigolium scan -t <url> -S --format sqlite -o run.sqlite` |
+| Fail CI when a finding at/above a severity is present | `vigolium scan -t <url> --fail-on high` |
+| Split stateless multi-target output into per-host files | `vigolium scan -T targets.txt -S --split-by-host --format fs` |
+| Compact agent-friendly JSON (finding + linked records) | `vigolium finding -j --with-records --min-severity high` |
+| Mirror ingested traffic + findings to a live file tree | `vigolium server --mirror-fs ./mirror` |
 | Clean database records | `vigolium db clean --host <hostname>` |
 | List available scanner modules | `vigolium module ls` or `vigolium scan -M` |
 | Enable/disable specific modules | `vigolium module enable xss` / `module disable sqli` |
@@ -225,15 +236,20 @@ OpenAPI flags: `--spec-url` (use spec servers), `--spec-header` (auth headers), 
 | Format | Flag | Notes |
 |--------|------|-------|
 | Console (default) | `--format console` | Human-readable tables to stderr |
-| JSONL | `--format jsonl` or `-j` | Machine-readable, one JSON object per line |
+| JSONL | `--format jsonl` | Machine-readable bulk stream, one `{"type":...,"data":{...}}` envelope per line |
 | HTML report | `--format html -o report.html` | Interactive ag-grid report, requires `-o` |
+| SQLite | `--format sqlite -S -o run.sqlite` | Dumps the run's standalone temp DB via `VACUUM INTO`. Requires `-S/--stateless` + `-o`. Aliases: `sqlite3`, `db`. Reopen with `vigolium finding/traffic -S --db run.sqlite` |
+| Filesystem tree | `--format fs -o run` | Browsable flat tree: `run-traffic/` + `run-findings/` with per-host `.req` / `.resp.headers` / `.resp.body` / `.md` files + `index.json`. No `-o` → `vigolium-traffic/` + `vigolium-findings/`. See recipe 16b |
 
 Multiple formats can be combined: `--format jsonl,html -o report.html`
 
 - Export from database: `vigolium export --format jsonl -o full-export.jsonl`
 - Export specific data: `vigolium export --only findings,http`
 - Export HTML report: `vigolium export --format html -o report.html`
+- Export a browsable filesystem tree: `vigolium export --format fs -o run`
 - DB export with filters: `vigolium db export -f csv -o records.csv --host example.com`
+
+> **`-j`/`--json` vs `--format jsonl`.** On the read/query commands (`finding`, `traffic`, `db`), `-j`/`--json` emits a **single compact, token-aware object** built for driving vigolium from a coding agent (bodies header-kept + preview-capped, binary/static stubbed, findings get a windowed evidence snippet) — different from the bulk `--format jsonl` stream of full `{"type":...,"data":{...}}` envelopes. See recipe 14c.
 
 ## Workflow Recipes
 
@@ -331,7 +347,13 @@ vigolium server --host 0.0.0.0 --service-port 8443 -A
 
 # With transparent proxy for recording traffic
 vigolium server --ingest-proxy-port 8080
+
+# Mirror every ingested record + finding to a live browsable file tree
+# (<dir>/traffic + <dir>/findings, in addition to the DB — readable with ls/grep/jq)
+vigolium server --ingest-proxy-port 8080 --mirror-fs ./mirror
 ```
+
+`--mirror-fs <dir>` (config `server.mirror_fs_path`) mirrors each saved HTTP record and finding to `<dir>/traffic/` + `<dir>/findings/` as they are persisted — the same per-host `.req`/`.resp.*`/`.md` layout as `--format fs`, but with an append-only `index.jsonl` (vs the one-shot export's `index.json` array). It runs on a background goroutine that never blocks the DB save, resumes per-host id numbering across restarts, and is **server-ingestion-only** (CLI scans are unaffected).
 
 ### 10. Scan-on-Receive (Ingest + Auto-Scan)
 ```bash
@@ -749,7 +771,8 @@ scripts) follow this discover → confirm → review chain:
    URL / stdin (`-`). Output is stable JSON: `result.baseline`,
    `result.replay`, `result.diff` (status delta, length delta,
    content-hash, payload reflection, interpretation). Use `--pretty` for a
-   human summary.
+   human summary. For **many** requests at once, see the bulk mode in
+   step 7 below.
 
 3. **Persist auth state** — multi-step flows (login → CSRF → action) need
    cookies between calls:
@@ -780,10 +803,66 @@ scripts) follow this discover → confirm → review chain:
    vigolium replay --record-uuid <uuid> -m '...' --in-replace
    ```
 
+7. **Bulk replay** — pass `--all` (or any record filter: `--host`,
+   `--method`, `--status`, `--path`, `--source`, `--search`, `--body`) to
+   run **every** matched stored record through the same engine instead of a
+   single source. This mirrors `traffic --replay`, but each record goes
+   through the mutation/diff engine and results stream as **JSONL** (one
+   `result` object per line; single-source mode keeps its one indented
+   object). Any `--mutate` is applied to every record that has that
+   insertion point — a batch fuzz primitive — and without `--mutate` each
+   record is re-sent verbatim. Throttle with `-c/--concurrency` (default
+   10), cap with `-n/--limit` (default 100; `--all` lifts it), and read a
+   standalone export with `-S --db`:
+   ```bash
+   # Re-send ALL stored traffic through Burp, 5 at a time
+   vigolium replay --all --proxy http://127.0.0.1:8080 -c 5
+
+   # From a standalone .sqlite / .jsonl export (project scoping off)
+   vigolium replay -S --db scan.sqlite --all --proxy http://127.0.0.1:8080 -c 5
+
+   # Fuzz an 'id' param across every matching GET record
+   vigolium replay --method GET --host api.example.com -m 'name=id,payload=1 OR 1=1'
+   ```
+   Bulk selection flags are mutually exclusive with `--record-uuid` /
+   `--finding-id` / `--input`. `--with-browser` is **not** on `replay` —
+   for browser-driven bulk replay use `traffic --replay --with-browser`.
+   Pipe the JSONL through `jq` to filter (e.g. only records whose status
+   changed).
+
 Routes through `HTTP_PROXY` / `HTTPS_PROXY` (or `--proxy`) for Burp
 inspection. Honors `--project-uuid` / `--project-name` for project
 scoping. Mutations support both forms: `--mutate 'name=id,payload=1 OR 1=1'`
 or shorthand `--mutate 'id:URL_PARAM:1 OR 1=1'`.
+
+### 14c. Compact Agent JSON (`-j`/`--json` on finding / traffic / db)
+
+For driving vigolium from a coding agent, `-j`/`--json` on the read commands (`finding`, `traffic`, `db ls`) emits **one token-aware object** — not the bulk export stream. Bodies are header-kept and preview-capped (request 1 KiB, response 2 KiB), gzip is decoded transparently, binary/static-asset bodies are stubbed as `body_omitted:"binary"` + `body_sha256`, truncated bodies carry `body_truncated:true` + `body_sha256`, and each finding gets a ±240-char `response_evidence` snippet windowed on the match. `-j` and `--json` are the same flag.
+
+```bash
+# Compact JSON for a filtered finding set
+vigolium finding -j --severity high,critical
+
+# Self-contained triage bundle: finding + its linked HTTP records embedded
+vigolium finding -j --id 42 --with-records
+
+# Findings at/above a severity (threshold expands upward: high → high+critical)
+vigolium finding -j --min-severity high
+
+# Every finding from an agent run (one root UUID expands to the whole run tree)
+vigolium finding -j --agentic-scan <uuid> --with-records
+
+# Shape the payload
+vigolium finding -j --compact                       # metadata only — drop bodies + evidence
+vigolium finding -j --fields id,severity,module_id,url,response_evidence
+vigolium finding -j --full-body                     # complete bodies, no caps or stubbing
+
+# Same compact contract on traffic and db ls
+vigolium traffic -j --host api.example.com --method POST
+vigolium db ls -j --compact                          # default table = http_records
+```
+
+Shaping flags shared by `finding` / `traffic` / `db ls`: `--compact` (metadata only), `--fields a,b,c` (project top-level keys), `--full-body` (complete bodies). `--with-records`, `--min-severity`, and `--agentic-scan` are **finding-only**. Note: `db stats -j` is the exception — it emits its raw stats struct, not the compact view.
 
 ### 16. Export and Reports
 ```bash
@@ -805,6 +884,73 @@ vigolium db export -f csv -o records.csv
 vigolium db export -f markdown -o report.md
 vigolium db export --host example.com --from 2024-01-01
 ```
+
+### 16b. Filesystem Export (`--format fs`)
+
+`--format fs` writes a flat, browsable tree so a coding agent (or anyone with `ls`/`grep`/`jq`) can investigate a scan with no database. It writes two sibling dirs off the `-o` base — `-o run` yields `run-traffic/` + `run-findings/`; with no `-o` it defaults to `vigolium-traffic/` + `vigolium-findings/` in the cwd.
+
+```bash
+# Scan and write the tree (works with or without -S)
+vigolium scan -t https://example.com --format fs -o run
+
+# Alongside other formats
+vigolium scan -t https://example.com --format jsonl,fs -o run
+
+# From the database, honoring export filters
+vigolium export --format fs -o run
+vigolium db export --format fs -o run --host example.com
+
+# Request-only tree (drop the .resp.* files)
+vigolium scan -t https://example.com --format fs -o run --omit-response
+```
+
+Layout per host (ids are zero-padded, assigned in `sent_at` order so re-exports are reproducible):
+
+```
+run-traffic/
+  index.json                 # flat jq-friendly array: id → method/url/status/content_type/bytes/finding
+  <host>/0001.req            # "@target <scheme>://<authority>" line, then the raw request verbatim
+  <host>/0001.resp.headers   # status line + response headers
+  <host>/0001.resp.body      # response body, gzip-decoded so it greps clean
+run-findings/
+  index.json                 # flat array: id → severity/confidence/module/title/url/linked-traffic
+  <host>/0001.md             # finding rendered + cross-linked to its ../run-traffic/<host>/*.req
+```
+
+Notes: the `.req` file is directly replayable by stripping line 1 (`@target …`). `--omit-response` drops the `.resp.*` files. `--split-by-host` is a **no-op** here — the fs layout already splits by host. For `scan-url`/`scan-request`, pass `-o`, `-S`, or a phase flag so the request routes through the runner that writes the tree.
+
+### 16c. Standalone SQLite Export (`--format sqlite`)
+
+`--format sqlite` dumps the run's standalone per-run database to `<output>.sqlite` via `VACUUM INTO` (fully checkpointed, no WAL/SHM sidecars). It **requires `-S/--stateless`** (it exports the temp per-run DB; for the persisted DB use `vigolium export`) and `-o/--output`. Aliases: `sqlite3`, `db`.
+
+```bash
+# Dump the run to a self-contained .sqlite
+vigolium scan -t https://example.com -S --format sqlite -o run.sqlite
+
+# Per-host files under stateless multi-target split (base-<host>.sqlite)
+vigolium scan -T targets.txt -S --split-by-host --format sqlite -o run
+
+# The exported file reopens directly, no server needed
+vigolium finding -S --db run.sqlite
+vigolium traffic -S --db run.sqlite --host example.com
+```
+
+### 16d. CI Exit-Code Gating (`--fail-on` / `--soft-fail`)
+
+`--fail-on <severity>` makes `scan` / `run` / `scan-url` / `scan-request` exit non-zero when the scan produced at least one finding **at or above** that severity — output is always written first, then the gate fires. Accepted severities (ascending): `info`, `suspect`, `low`, `medium`, `high`, `critical`.
+
+```bash
+# Fail the pipeline on any high/critical finding
+vigolium scan -t https://example.com --fail-on high
+
+# Combine with a shareable artifact
+vigolium scan -t https://example.com -S --format jsonl -o out.jsonl --fail-on medium
+
+# Never break the wrapping script even on error (global; overrides --fail-on)
+vigolium scan -t https://example.com --fail-on high --soft-fail
+```
+
+`--soft-fail` is a global flag that forces exit 0 even when the gate (or any other error) trips. Under `-P`/`--split-by-host` the gate is evaluated **per child**; the parent batch only exits non-zero when every target fails.
 
 ### 17. Whitebox Scanning (Source-Aware)
 ```bash
@@ -1039,7 +1185,7 @@ These flags are available on all commands (persistent flags on root):
 | `--skip-heuristics` | — | `false` | Disable pre-scan heuristics (same as `--heuristics-check=none`) |
 | `--only` | — | — | Run only a single phase |
 | `--skip` | — | — | Skip specific phases |
-| `--format` | — | `console` | Output format: console, jsonl, html (comma-separated for multiple) |
+| `--format` | — | `console` | Output format: console, jsonl, html, `sqlite` (needs `-S`), `fs` (flat traffic/finding tree). Comma-separated for multiple |
 | `--scan-on-receive` | `-S` | `false` | Continuously scan new HTTP records as they arrive in the database |
 | `--full-native-scan-on-receive` | — | `false` | Run the full native scan pipeline (discovery + spidering + dynamic-assessment) continuously on received records |
 | `--source` | — | — | Path to application source code |
@@ -1050,7 +1196,8 @@ These flags are available on all commands (persistent flags on root):
 | `--project-name` | — | — | Project name to scope all operations to |
 | `--verbose` | `-v` | `false` | Verbose logging |
 | `--silent` | — | `false` | Suppress all output except findings |
-| `--json` | `-j` | `false` | Format output as JSONL (one JSON object per line) |
+| `--json` | `-j` | `false` | On `scan`: JSONL findings. On `finding`/`traffic`/`db`: a single compact, token-aware agent JSON object (see recipe 14c) |
+| `--soft-fail` | — | `false` | Always exit 0 even on error (keeps CI/wrappers from breaking); overrides `--fail-on` |
 | `--ci-output-format` | — | `false` | CI-friendly output: JSONL findings only, no color, no banners |
 | `--debug` | — | `false` | Dump raw HTTP traffic |
 | `--dump-traffic` | — | `false` | Print every HTTP request/response pair to stderr (Burp-style) |
@@ -1077,7 +1224,9 @@ These flags apply to `scan`, `scan-url`, `scan-request`, and `run` commands:
 | `--output` | `-o` | — | Write findings / reports to this file path |
 | `--stats` | — | `false` | Show live progress stats during scanning |
 | `--include-response` | — | `false` | Include full HTTP response body in output |
-| `--omit-response` | — | `false` | Omit raw HTTP request/response bytes from the output file (keeps metadata, smaller files) |
+| `--omit-response` | — | `false` | Omit raw HTTP request/response bytes from the output file (keeps metadata, smaller files; drops the `.resp.*` files under `--format fs`) |
+| `--fail-on` | — | — | Exit non-zero when a finding at/above this severity is present (`info`,`suspect`,`low`,`medium`,`high`,`critical`). Output is written first; `--soft-fail` overrides; per-child under `-P` |
+| `--split-by-host` | — | `false` | In stateless multi-target mode (`-S -T file`), write a separate per-host output file (`base-<host>.<ext>`) instead of one unified file (scan/run only; no-op for `--format fs`) |
 | `--retries` | — | `1` | Number of retry attempts for failed requests |
 | `--stream` | — | `false` | Process targets as a stream without buffering or deduplication |
 | `--header` | `-H` | — | Add custom HTTP header (repeatable, e.g. `-H 'Auth: Bearer tok'`) |
@@ -1113,6 +1262,11 @@ These flags apply to `scan`, `scan-url`, `scan-request`, and `run` commands:
 - `--only` and `--skip` are mutually exclusive
 - `--format html` requires `-o/--output`; multiple `--format` values also require `-o/--output`
 - `--format html` is only supported for the `discovery` and `spidering` phases when combined with `--only`
+- `--format sqlite` requires `-S/--stateless` **and** `-o/--output` (it dumps the standalone per-run DB via `VACUUM INTO`); aliases `sqlite3`/`db`. Reopen with `vigolium finding/traffic -S --db <file>.sqlite`
+- `--format fs` writes two sibling dirs (`<base>-traffic/` + `<base>-findings/`); with no `-o` it defaults to `vigolium-traffic/`+`vigolium-findings/` in the cwd. Available on `scan`/`scan-url`/`scan-request`/`run`, `export`, and `db export`. `--omit-response` drops the `.resp.*` files; `--split-by-host` is a no-op (fs already splits by host)
+- `--fail-on <sev>` gates the exit code (`scan`/`run`/`scan-url`/`scan-request`); output is written first, `--soft-fail` (global) forces exit 0, and under `-P`/`--split-by-host` it is evaluated per child (the parent batch fails only when every target fails)
+- `--split-by-host` only takes effect in stateless multi-target mode (`-S -T <file>`); it is required for `-P > 1` parallel fan-out and ignored for a single target or under `--db-isolate`
+- Server `--mirror-fs <dir>` (config `server.mirror_fs_path`) mirrors ingested traffic + findings to a live `<dir>/traffic`+`<dir>/findings` tree (append-only `index.jsonl`); it is server-ingestion-only and never blocks the DB save — CLI scans are unaffected
 - `--target/-t` and `--spec-url` are mutually exclusive for ingest
 - `--source` and `--source-url` are mutually exclusive
 - `--stateless` requires `-o/--output`; `--stateless` and `--db` are mutually exclusive
