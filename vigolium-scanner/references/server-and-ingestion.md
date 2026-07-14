@@ -22,16 +22,23 @@ Start the API server with Swagger UI, ingestion endpoints, and optional scan-on-
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--alternative-ingest-key` | — | []string | — | Additional API key for ingestion endpoints (repeatable) |
-| `--catchup-threads` | — | int | `4` | Workers for background scanning of unscanned records |
-| `--disable-catchup` | — | bool | `false` | Disable automatic background scanning of unscanned records |
+| `--burp-bridge-url` | — | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Merge live Burp traffic from this loopback bridge URL into `/api/http-records` |
+| `--catchup-threads` | — | int | `4` | **Deprecated: no-op** (catch-up scanning is disabled; the live scan-on-receive scanner covers post-cursor records) |
+| `--demo-only` | — | bool | `false` | Expose only the demo allowlist (GET `/api/findings`, `/api/http-records`, `/api/modules`, `/api/stats`, `/api/extensions`) |
+| `--disable-catchup` | — | bool | `false` | **Deprecated: no-op** (catch-up scanning is already disabled) |
 | `--disable-warm-session` | — | bool | `false` | Disable agent warm session pooling |
+| `--export-ca` | — | string | — | Write the ingest-proxy MITM CA certificate to this path and exit |
 | `--host` | — | string | `0.0.0.0` | Bind address for the API server |
 | `--ingest-proxy-port` | — | int | `0` (disabled) | Transparent HTTP proxy port for recording traffic |
 | `--mem-buffer` | — | int | `10000` | In-memory queue capacity before spilling to disk |
 | `--mirror-fs` | — | string | — | Mirror ingested traffic + findings to a live flat file tree under this dir (`<dir>/traffic`, `<dir>/findings`), in addition to the DB (config `server.mirror_fs_path`) |
 | `--no-agent` | — | bool | `false` | Disable all agent endpoints and warm session pooling |
 | `--no-auth` | `-A` | bool | `false` | Run server without API key authentication |
+| `--no-swagger` | — | bool | `false` | Disable the Swagger UI and API spec endpoint |
 | `--output` | `-o` | string | — | Write findings to specified output file |
+| `--passive-only` | — | bool | `false` | With `-S`/`--scan-on-receive`, run passive modules only (no active scan traffic; includes secret detection) |
+| `--proxy-insecure` | — | bool | `false` | When intercepting HTTPS (`--proxy-mitm`), skip verification of the upstream server's TLS certificate |
+| `--proxy-mitm` | — | bool | `false` | Intercept HTTPS through `--ingest-proxy-port` using a generated CA so TLS traffic is recorded (trust the CA printed at startup) |
 | `--service-port` | — | int | `9002` | Port for the REST API server |
 | `--view-only` | — | bool | `false` | Run server in read-only mode (disables scanning, ingestion, agent, and all write endpoints) |
 
@@ -49,9 +56,11 @@ API key resolution priority (highest to lowest):
 |------|-------------|
 | `-t <url>` | Target URL (used with `-S` for scope) |
 | `-S` / `--scan-on-receive` | Auto-scan every ingested request |
+| `--full-native-scan-on-receive` | Run the full native pipeline (discovery + spidering + dynamic-assessment) on received records, not dynamic-assessment only |
 | `-c` / `--concurrency` | Worker pool size |
 | `--proxy` | Proxy for outgoing requests |
-| `--disable-fetch-response` | Store requests without fetching responses |
+
+(`--disable-fetch-response` is an **ingest-only** flag — it is not registered on `server`.)
 
 ### Examples
 
@@ -92,8 +101,12 @@ vigolium server --ingest-proxy-port 8080 --mirror-fs ./mirror
 | `POST` | `/api/ingest` | Submit HTTP records for ingestion |
 | `POST` | `/api/agent/run/query` | Single-shot agent prompt execution |
 | `POST` | `/api/agent/run/autopilot` | Autonomous AI-driven scanning session |
+| `POST` | `/api/agent/run/swarm` | AI-guided targeted / full-scope scan |
+| `POST` | `/api/agent/run/audit` | Whitebox audit (`driver: auto\|both\|audit\|piolium`) |
+| `POST` | `/api/agent/chat/completions` | OpenAI-compatible chat completions |
 | `GET` | `/api/agent/status/list` | List agent runs |
 | `GET` | `/api/agent/status/:id` | Check agent run status |
+| `GET` | `/api/agent/sessions[/:id[/logs\|/artifacts]]` | List / inspect agent sessions, logs, and artifacts |
 | `GET` | `/` | Swagger UI dashboard |
 
 ---
@@ -161,7 +174,7 @@ vigolium ingest -t https://example.com -I burp -i export.xml --disable-fetch-res
 
 **Aliases:** `traffics`, `tf`
 
-Browse stored HTTP traffic. Shortcut for `vigolium db ls --table http_records`.
+Browse stored HTTP traffic. Shortcut for `vigolium db ls http_records`.
 
 ### Filter flags (persistent, inherited by replay)
 
@@ -179,8 +192,8 @@ Browse stored HTTP traffic. Shortcut for `vigolium db ls --table http_records`.
 | `--source` | string | — | Filter by record source (e.g. scanner, ingest-cli, ingest-server, ingest-proxy, seed) |
 | `--sort` | string | `created_at` | Sort field: uuid, created_at, sent_at, method, status, time |
 | `--asc` | bool | `false` | Sort in ascending order (default: descending) |
-| `--limit` | `-n` | int | `100` | Maximum records to display |
-| `--offset` | `-o` | int | `0` | Number of records to skip (for pagination) |
+| `--limit` / `-n` | int | `100` | Maximum records to display |
+| `--offset` / `-o` | int | `0` | Number of records to skip (for pagination) |
 
 ### Display flags (traffic only)
 
@@ -189,8 +202,11 @@ Browse stored HTTP traffic. Shortcut for `vigolium db ls --table http_records`.
 | `--tree` | bool | `false` | Display as host/path hierarchy tree |
 | `--raw` | bool | `false` | Full raw HTTP request and response |
 | `--burp` | bool | `false` | Burp Suite-style colored format |
+| `--markdown` | bool | `false` | Render matched records as Markdown (request/response in fenced http blocks) to stdout |
 | `--columns` | []string | — | Columns to show (comma-separated, e.g. HOST,METHOD,PATH,STATUS) |
 | `--exclude-columns` | []string | — | Columns to hide (comma-separated) |
+| `--exclude-search` / `--exclude-header` / `--exclude-body` | []string / string | — | Inverse-search filters (drop records where the term appears) |
+| `--stateless` / `-S` + `--glob-db` | bool / string | — | Read from a `.jsonl`/`.sqlite` export (or a glob merged into one temp DB) with project scoping off |
 
 With `-j`/`--json`, `traffic` emits **one compact, token-aware object** (headers kept, bodies preview-capped, binary/static stubbed) built for coding-agent consumption. Shape it with `--compact` (metadata only), `--fields a,b,c` (project top-level keys), or `--full-body` (complete bodies) — the same contract as `finding`/`db ls`. See SKILL.md recipe 14c.
 
@@ -267,6 +283,9 @@ search term), so it inherits all the `traffic` filter flags.
 | `--with-browser` | bool | `false` | Replay each URL through a real browser routed via `--proxy`, so Burp captures browser-driven traffic (real TLS fingerprint, JS execution, subresource loads). A navigation is a GET, so non-GET method/body are not reproduced. |
 | `--in-replace` | bool | `false` | Overwrite each stored response with the new replay response |
 | `--timeout` | duration | `15s` | Per-request timeout for the replay |
+| `--burp-bridge-url` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Merge live traffic from this loopback Burp bridge URL with local DB records |
+| `--save-to-vigolium-db` | bool | `false` | Persist the live Burp records selected by the active filters into the database |
+| `--save-to-burp` | bool | `false` | Copy the DB records selected by the active filters into Burp's Target site map |
 
 Routes through `--proxy` (or `HTTP_PROXY`/`HTTPS_PROXY`). Inherits all filter
 flags from the `traffic` command.
