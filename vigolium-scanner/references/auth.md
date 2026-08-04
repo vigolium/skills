@@ -1,5 +1,7 @@
 # Session / Auth Configuration
 
+> **Related:** [scanning.md](scanning.md) for where `--auth-file` applies · [agent-modes.md](agent-modes.md) for agent-generated sessions
+
 Session configuration enables authenticated scanning across all agent modes and standalone scans. Pipeline Phase 0 (source analysis) can auto-generate this configuration, or it can be provided manually via the repeatable `--auth-file` and `--auth` flags.
 
 | Flag | Accepts | Repeatable |

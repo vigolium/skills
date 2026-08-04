@@ -1,5 +1,7 @@
 # Writing JavaScript Extensions
 
+> **Related:** [data.md](data.md) for the `extensions` / `js` commands
+
 Guide for writing custom vigolium scanner modules as JavaScript extensions.
 
 ## Table of Contents
@@ -225,7 +227,7 @@ The global `vigolium.record` also provides access to the current record context.
 - Encoding: `base64Encode/Decode`, `urlEncode/Decode`, `htmlEncode/Decode`
 - Hashing: `sha1`, `sha256`, `md5`
 - Random: `randomString(len)`
-- Regex: `regexMatch(str, pattern)`, `regexExtract(str, pattern)`
+- Regex: `regexMatch(str, pattern)`, `regexExtract(str, pattern)`, `regexFindAll(str, pattern)` — all non-overlapping matches, or null
 - File I/O: `readFile`, `readLines`, `writeFile`, `mkdir`, `glob`
 - URL: `parse_url(url, format)`, `pathToTemplate(path)`, `hasDynamicSegment(path)`
 - Params: `toSet(csv)`, `extractParamNames(str)`
@@ -233,6 +235,7 @@ The global `vigolium.record` also provides access to the current record context.
 - HTML: `cssSelect(html, selector)` — CSS selector queries on HTML
 - Token extraction: `extractToken(response, rules)` — extract tokens from HTTP responses
 - JWT: `jwtDecode(token)`, `jwtEncode(payload, opts?)`, `jwtExpired(token)`
+- TOTP: `totpCode(secret)` — generate a TOTP code from a base32 secret (RFC 6238)
 - Multipart: `multipart(fields)` — build multipart/form-data bodies
 - Anomaly: `detectAnomaly(responses)`
 - Other: `sleep(ms)`, `exec(cmd)`, `getEnv`, `setEnv`, `jsonExtract`
@@ -268,10 +271,6 @@ The global `vigolium.record` also provides access to the current record context.
 - `url(url)`, `urls(content)`, `curl(command)`, `raw(request, response?)`
 - `openapi(spec, opts?)`, `postman(collection)`
 
-### vigolium.source
-- `list(hostname?)`, `get(id)`, `getByHostname(hostname)`
-- `readFile(hostname, path)`, `listFiles(hostname, glob?)`, `searchFiles(hostname, pattern)`
-
 ### vigolium.agent (AI-augmented)
 - `ask(prompt, opts?)` — single prompt → text response
 - `chat(messages, opts?)` — conversation → text response
@@ -296,6 +295,12 @@ The global `vigolium.record` also provides access to the current record context.
 ### vigolium.payloads(type)
 - Returns built-in payload wordlists by vulnerability type
 - Types: `"xss"`, `"sqli"`, `"ssti"`, `"ssrf"`, `"lfi"`, `"path_traversal"`, `"xxe"`, `"cmdi"`, `"open_redirect"`, `"crlf"`
+
+### vigolium.mcp (Model Context Protocol)
+- `client(url, opts?)` — MCP client over a base URL (auto-tracks `Mcp-Session-Id`); the handle exposes `initialize()`, `notifyInitialized()`, `listTools()`, `callTool(name, args)`, `readResource(uri)`, plus raw `request`/`notify`/`send` escape hatches
+- `parseSse(body)` — parse an SSE response body into discrete events
+- `detect(req, resp)` — true when the request/response pair carries strong MCP indicators
+- `buildRequest(method, params?, opts?)` — marshal a JSON-RPC 2.0 envelope (feed into `vigolium.http.send()`)
 
 ### vigolium.config
 - Read-only config values: `vigolium.config["key"]`
@@ -857,35 +862,6 @@ module.exports = {
 ```
 
 This pattern applies to other vulnerability classes too — for example, SSTI extensions could have Jinja2, Freemarker, and Twig variants; XSS extensions could have reflected, DOM-based, and attribute-context variants.
-
-### Source Code Correlation
-
-```javascript
-module.exports = {
-  id: "source-correlation",
-  name: "Source-Traffic Correlation",
-  type: "passive",
-  severity: "info",
-  confidence: "firm",
-  tags: ["source", "correlation"],
-  scanTypes: ["per_request"],
-
-  scanPerRequest: function(ctx) {
-    var parsed = vigolium.parse.url(ctx.request.url);
-    if (!parsed) return null;
-
-    var repos = vigolium.source.getByHostname(parsed.hostname);
-    if (repos.length === 0) return null;
-
-    // Search source code for the endpoint path
-    var matches = vigolium.source.searchFiles(parsed.hostname, parsed.path);
-    if (matches.length === 0) return null;
-
-    ctx.record.addRemarks(["source-match: " + matches[0].path + ":" + matches[0].line]);
-    return null; // Info-only, just annotate
-  }
-};
-```
 
 ---
 

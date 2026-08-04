@@ -1,5 +1,7 @@
 # Scanning Commands Reference
 
+> **Related:** [agent-loop.md](agent-loop.md) for triage · [flags.generated.md](flags.generated.md) for any flag · `vigolium scan -h`
+
 Complete flag reference for `scan`, `scan-url`, `scan-request`, and `run` commands.
 
 ## Table of Contents
@@ -84,6 +86,7 @@ Stateless mode is great for ephemeral CI/CD runs — it creates a temp SQLite fi
 | `--discover-max-time` | duration | `1h` | Max time for content discovery per target |
 | `--fuzz-wordlist` | string | — | Custom fuzz wordlist path (enables fuzzing during discovery) |
 | `--no-prefix-breaker` | bool | `false` | Disable per-prefix circuit breaker that stops trap-directory recursion |
+| `--port-sweep-ports` | string | — | Override the alternate HTTP(S) ports swept on CLI target hosts (comma-separated; the sweep runs at `--intensity deep` or with `--follow-subdomains`) |
 
 ### Browser Spidering flags (scan & run)
 
@@ -96,6 +99,8 @@ Stateless mode is great for ephemeral CI/CD runs — it creates a temp SQLite fi
 | `--headless` | — | bool | `true` | Run browser in headless mode |
 | `--no-cdp` | — | bool | `false` | Disable Chrome DevTools Protocol event listener detection |
 | `--no-forms` | — | bool | `false` | Disable automatic form detection and filling during spidering |
+| `--headed` | — | bool | `false` | Show the browser window during spidering (sugar for `--headless=false`; wins when both are set) |
+| `--no-carry-browser-session` | — | bool | `false` | Do not carry the spidering browser's cleared session (cookies + UA) into discovery/scanning (on by default when `--spider` runs; scoped to the same host, respects `-H`) |
 
 ### External Harvest flags (scan & run)
 
@@ -114,7 +119,7 @@ Stateless mode is great for ephemeral CI/CD runs — it creates a temp SQLite fi
 
 > **Source-aware / SAST scanning is an agent feature**, not a native `scan`/`run` phase.
 > Use `vigolium agent audit --source <path-or-git-url>` (security code audit) or
-> `vigolium agent query --source <path> -t code-review`. See `references/agent-commands.md`.
+> `vigolium agent query --source <path> -t code-review`. See `references/agent-modes.md`.
 
 ### Examples
 
@@ -163,7 +168,7 @@ vigolium scan -t https://example.com --proxy http://127.0.0.1:8080
 # Speed tuning
 vigolium scan -t https://example.com -c 100 --rate-limit 200
 
-# Source-aware / whitebox scanning is an agent feature (see agent-commands.md)
+# Source-aware / whitebox scanning is an agent feature (see agent-modes.md)
 vigolium agent autopilot -t https://example.com --source ./src
 
 # Source-aware via git clone (--source accepts a git URL)
@@ -319,7 +324,7 @@ Run a single scan phase directly. Equivalent to `vigolium scan --only <phase>`.
 | `ingestion` | — |
 | `discovery` | `deparos`, `discover` |
 | `external-harvest` | — |
-| `known-issue-scan` | — |
+| `known-issue-scan` | `cve`, `kis`, `known-issues` |
 | `spidering` | `spitolas` |
 | `dynamic-assessment` | `audit`, `dast`, `assessment` |
 | `extension` | `ext` |

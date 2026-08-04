@@ -1,5 +1,7 @@
 # Server & Ingestion Reference
 
+> **Related:** [agent-loop.md](agent-loop.md) for `--mirror-fs` consumption and bulk replay
+
 Complete flag reference for `server`, `ingest`, and `traffic` commands.
 
 ## Table of Contents
@@ -7,7 +9,7 @@ Complete flag reference for `server`, `ingest`, and `traffic` commands.
 - [server](#server)
 - [ingest](#ingest)
 - [traffic](#traffic)
-- [traffic --replay](#traffic---replay)
+- [traffic --replay](#traffic---replay) — see `references/agent-loop.md`
 
 ---
 
@@ -22,7 +24,7 @@ Start the API server with Swagger UI, ingestion endpoints, and optional scan-on-
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--alternative-ingest-key` | — | []string | — | Additional API key for ingestion endpoints (repeatable) |
-| `--burp-bridge-url` | — | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Merge live Burp traffic from this loopback bridge URL into `/api/http-records` |
+| `--burp-bridge-url` | `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Merge live Burp traffic from this loopback bridge URL into `/api/http-records` |
 | `--catchup-threads` | — | int | `4` | **Deprecated: no-op** (catch-up scanning is disabled; the live scan-on-receive scanner covers post-cursor records) |
 | `--demo-only` | — | bool | `false` | Expose only the demo allowlist (GET `/api/findings`, `/api/http-records`, `/api/modules`, `/api/stats`, `/api/extensions`) |
 | `--disable-catchup` | — | bool | `false` | **Deprecated: no-op** (catch-up scanning is already disabled) |
@@ -40,6 +42,7 @@ Start the API server with Swagger UI, ingestion endpoints, and optional scan-on-
 | `--proxy-insecure` | — | bool | `false` | When intercepting HTTPS (`--proxy-mitm`), skip verification of the upstream server's TLS certificate |
 | `--proxy-mitm` | — | bool | `false` | Intercept HTTPS through `--ingest-proxy-port` using a generated CA so TLS traffic is recorded (trust the CA printed at startup) |
 | `--service-port` | — | int | `9002` | Port for the REST API server |
+| `--timeout` | — | duration | `15s` | HTTP request timeout for background scan workers (e.g. `30s`, `1m`) |
 | `--view-only` | — | bool | `false` | Run server in read-only mode (disables scanning, ingestion, agent, and all write endpoints) |
 
 ### Server Authentication
@@ -137,6 +140,8 @@ Ingest HTTP requests into the database, either locally or via a remote server.
 | `--spec-default` | Default value for required parameters (default: `1`) |
 | `--disable-fetch-response` | Store request-only (don't fetch responses) |
 | `--scope-origin` | Origin scope mode for filtering |
+| `--no-tech-filter` | Disable the tech-stack allowlist (run every module regardless of detected stack; auto-on at `--intensity deep`) |
+| `--no-waf-pacing` | Disable proactive CDN/WAF-edge pacing (reactive back-off after a WAF block still applies) |
 
 ### Local vs Remote Mode
 
@@ -193,7 +198,7 @@ Browse stored HTTP traffic. Shortcut for `vigolium db ls http_records`.
 | `--sort` | string | `created_at` | Sort field: uuid, created_at, sent_at, method, status, time |
 | `--asc` | bool | `false` | Sort in ascending order (default: descending) |
 | `--limit` / `-n` | int | `100` | Maximum records to display |
-| `--offset` / `-o` | int | `0` | Number of records to skip (for pagination) |
+| `--offset` | int | `0` | Number of records to skip (for pagination) |
 
 ### Display flags (traffic only)
 
@@ -256,55 +261,18 @@ vigolium traffic --columns HOST,METHOD,PATH,STATUS,AUTH
 
 ## traffic --replay
 
-**Usage:** `vigolium traffic [search-term] --replay [flags]`
+Re-sending stored traffic — both `traffic --replay` (human comparison table,
+`--with-browser`) and the top-level `vigolium replay` (structured JSONL diffs) —
+is documented with the rest of the confirm/hand-off workflow in
+**`references/agent-loop.md`** → *Bulk replay*.
 
-Re-send the matched stored requests and compare original vs new responses. This
-is a mode of the `traffic` command (a flag, not a subcommand — there is no
-`traffic replay` subcommand; a bare `replay` argument is treated as a fuzzy
-search term), so it inherits all the `traffic` filter flags.
-
-> **Bulk replay, two ways.** `traffic --replay` re-sends records **verbatim** and
-> prints a human comparison table — a firehose for pushing captured traffic at a
-> proxy. The top-level `vigolium replay --all` selects the same filtered record
-> set but runs each record through the mutation/diff engine and streams **stable
-> JSONL** (baseline/replay/diff per record), and can apply a `--mutate` payload
-> across the whole batch. Use `traffic --replay` to eyeball/intercept traffic;
-> use `replay --all` when you want structured diffs, payload reflection, or a
-> batch fuzz. `--with-browser` is only on `traffic --replay`. See the `replay`
-> guide in SKILL.md §14 (step 7) for the bulk flag set.
-
-### replay-specific flags
+Burp-bridge **listing** sync flags stay here because they operate on the
+`traffic` listing, not on replay:
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--replay` | bool | `false` | Re-send matched requests and compare responses instead of listing them |
-| `-a, --all` | bool | `false` | Replay every matched record, ignoring the `-n/--limit` cap (which defaults to the most recent 100). Pair with `--replay` to re-send all stored traffic. |
-| `-c, --concurrency` | int | `10` | Concurrent replays; keep low to avoid overwhelming an intercepting proxy like Burp |
-| `--with-browser` | bool | `false` | Replay each URL through a real browser routed via `--proxy`, so Burp captures browser-driven traffic (real TLS fingerprint, JS execution, subresource loads). A navigation is a GET, so non-GET method/body are not reproduced. |
-| `--in-replace` | bool | `false` | Overwrite each stored response with the new replay response |
-| `--timeout` | duration | `15s` | Per-request timeout for the replay |
-| `--burp-bridge-url` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Merge live traffic from this loopback Burp bridge URL with local DB records |
-| `--save-to-vigolium-db` | bool | `false` | Persist the live Burp records selected by the active filters into the database |
-| `--save-to-burp` | bool | `false` | Copy the DB records selected by the active filters into Burp's Target site map |
+| `--burp-bridge-url` / `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Merge live traffic from this loopback Burp bridge URL with local DB records |
+| `--save-to-vigolium-db` | bool | `false` | Persist the live Burp records selected by the active filters into the database (requires `--burp-bridge-url`; not with `--replay`) |
+| `--save-to-burp` | bool | `false` | Copy the DB records selected by the active filters into Burp's Target site map (requires `--burp-bridge-url`; not with `--replay`) |
 
-Routes through `--proxy` (or `HTTP_PROXY`/`HTTPS_PROXY`). Inherits all filter
-flags from the `traffic` command.
-
-### Examples
-
-```bash
-# Replay all matching requests
-vigolium traffic login --replay
-
-# Replay ALL stored traffic through Burp (ignore the default 100 cap)
-vigolium traffic --replay --all --proxy http://127.0.0.1:8080 -c 5
-
-# Replay through Burp at low concurrency
-vigolium traffic --host example.com --replay --proxy http://127.0.0.1:8080 -c 5
-
-# Replay each URL in a real browser routed through Burp
-vigolium traffic --host example.com --replay --with-browser --proxy http://127.0.0.1:8080
-
-# Replay and replace stored responses
-vigolium traffic --host api.example.com --replay --in-replace
-```
+The two `--save-to-*` flags are mutually exclusive with `--replay`.

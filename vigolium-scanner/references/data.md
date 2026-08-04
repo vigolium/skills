@@ -1,5 +1,7 @@
 # Data & Management Commands Reference
 
+> **Related:** [agent-loop.md](agent-loop.md) for the `-j` triage contracts · [flags.generated.md](flags.generated.md) for any flag
+
 Complete reference for `init`, `import`, `log`, `doctor`, `db`, `finding`, `module`, `extensions` (alias `ext`), `js`, `config`, `scope`, `source`, `auth`, `project`, `storage`, `strategy`, `export`, and `version` commands.
 
 ## Table of Contents
@@ -98,7 +100,7 @@ vigolium import ./src/vigolium-results --format html -o audit-report.html
 | `--format` | — | string | — | Also write a report after import: `html`, `report`, `pdf`, or `markdown` (`md`). Mirrors `vigolium export --format` |
 | `--output` | `-o` | string | — | Report output path or `gs://<project>/<key>` URL (required when `--format` is set; supports `{ts}`) |
 | `--glob-db` | — | string | — | Glob of local files to import alongside any positional paths (one format per run) |
-| `--burp-bridge-url` | — | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Import live Burp Proxy history from this loopback bridge URL |
+| `--burp-bridge-url` | `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Import live Burp Proxy history from this loopback bridge URL |
 | `--upload` / `--upload-key` | — | bool / string | — | Upload the import source to cloud storage after import (optional explicit key) |
 | `--severity` / `--search` | — | string | — | Filter the emitted report's findings |
 | `--report-title` / `--report-target` / `--report-duration` / `--report-generated-at` / `--report-url` | — | string | — | HTML report metadata |
@@ -211,7 +213,7 @@ List database records with filtering, sorting, and display options. The target t
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--limit` | `-n` | int | `100` | Max records to display |
-| `--offset` | `-o` | int | `0` | Records to skip |
+| `--offset` | — | int | `0` | Records to skip |
 
 ### Column selection flags
 
@@ -245,6 +247,10 @@ List database records with filtering, sorting, and display options. The target t
 |------|------|---------|-------------|
 | `--sort` | string | `created_at` | Sort field: uuid, created_at, sent_at, method, status_code, response_time |
 | `--asc` | bool | `false` | Sort ascending |
+
+### Agent JSON output flags
+
+With `-j`/`--json`, `db ls` emits the same compact, token-aware object as `finding`/`traffic` and accepts the shared shaping flags: `--compact` (metadata only), `--fields a,b,c` (project top-level keys), `--full-body` (complete bodies). `--with-records` is finding-only; `db stats -j` is the exception that emits its raw stats struct. See SKILL.md recipe 14c.
 
 ### Examples
 
@@ -420,13 +426,25 @@ Browse vulnerability findings with fuzzy search, filtering, raw display, and col
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--limit` | `-n` | int | `100` | Maximum findings to display |
-| `--offset` | `-o` | int | `0` | Number of findings to skip (for pagination) |
+| `--offset` | — | int | `0` | Number of findings to skip (for pagination) |
 | `--sort` | — | string | `found_at` | Sort by: found_at, created_at, severity, module, confidence |
 | `--asc` | — | bool | `false` | Sort in ascending order |
 
 ### Additional filter flags
 
 Also accepts: `--host`, `--method`, `--status`, `--path`, `--from`, `--to`, `--source`, plus `--search` (repeatable, AND-combined; searches module metadata, matched location, and the linked request/response), `--header`, `--body`, and their inverses `--exclude-search` (repeatable), `--exclude-header`, `--exclude-body`.
+
+### Finding → Burp push flags (triage handoff)
+
+Hand each selected finding's evidence request (and response, where available) to Burp for manual confirmation — the Organizer by default, or a Repeater tab under `--to-repeater`. This is an action, not a display: it returns before any table/JSON render and never runs the scanner. Only `finding` has these (traffic/`db ls` do not).
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--push-to-burp` | — | bool | `false` | Push the selected finding(s)' evidence request+response to Burp's Organizer for manual confirmation; requires `--burp-bridge-url` |
+| `--to-repeater` | — | bool | `false` | Push to a Burp Repeater tab instead of the Organizer (respects Burp's 30-tabs/min cap; warns above 20 findings) |
+| `--send-via-burp` | — | bool | `false` | With `--push-to-burp`/`--to-repeater`: re-issue the request through Burp's engine and store the fresh response |
+| `--burp-bridge-url` | `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Loopback Burp bridge URL used by `--push-to-burp` / `--to-repeater` |
+| `--http-mode` | — | string | — | With `--send-via-burp`: wire protocol — `auto`\|`http1`\|`http2`\|`http2_ignore_alpn` (default `auto`) |
 
 ### Agent JSON output flags
 
@@ -522,7 +540,7 @@ vigolium export --search "example.com" -o filtered.jsonl
 
 ## module
 
-**Usage:** `vigolium module [flags]` (aliases: `mo`)
+**Usage:** `vigolium module [flags]` (aliases: `mo`, `modules`)
 
 Manage scanner modules. Lists active and passive modules with their scan scope, severity, and enabled status.
 
@@ -660,8 +678,8 @@ The JS VM provides access to all `vigolium.*` namespaces:
 | `vigolium.scan` | Module listing, scope, finding creation, scan control |
 | `vigolium.db` | HTTP record and finding queries, annotations, comparison |
 | `vigolium.ingest` | URL, curl, raw HTTP, OpenAPI, Postman ingestion |
-| `vigolium.source` | Source code file listing, reading, searching |
 | `vigolium.agent` | AI-augmented analysis (ask, chat, complete, generatePayloads, analyzeResponse, confirmFinding) |
+| `vigolium.mcp` | Model Context Protocol client, SSE parsing, detection, JSON-RPC envelope building |
 | `vigolium.oast` | Out-of-band testing (enabled, payload, poll) |
 | `vigolium.log` | Logging (info, warn, error, debug) |
 | `vigolium.config` | Read-only config variables |
@@ -751,15 +769,15 @@ Config file location: `~/.vigolium/vigolium-configs.yaml`
 
 ## config clean
 
-**Usage:** `vigolium config clean [-F/--force]`
+**Usage:** `vigolium config clean [--force]`
 
 Reset Vigolium to a clean state: remove the entire `~/.vigolium/` directory (config, database, extensions, prompts, SAST rules, session directories) and regenerate fresh defaults by running the same bootstrap as `vigolium init`.
 
-Prompts for `yes` confirmation unless `-F/--force` is passed.
+Prompts for `yes` confirmation unless `--force` is passed.
 
 ```bash
 vigolium config clean
-vigolium config clean -F            # skip confirmation
+vigolium config clean --force       # skip confirmation
 ```
 
 Warning shown:
@@ -1010,14 +1028,14 @@ vigolium storage presign --key uploads/new.tar.gz --method PUT --expiry 30m --js
 
 **Usage:** `vigolium storage rm <key> [<key>...] [flags]` (alias `delete`)
 
-Permanently delete one or more objects from the active project's storage. Prompts for confirmation (typed `yes`) unless `-F` / `--force` is set.
+Permanently delete one or more objects from the active project's storage. Prompts for confirmation (typed `yes`) unless `--force` is set.
 
 ```bash
 # Single delete (prompts for confirmation)
 vigolium storage rm ugc/foo.tar.gz
 
 # Bulk delete, skip confirmation
-vigolium storage rm ugc/a.pdf ugc/b.pdf -F
+vigolium storage rm ugc/a.pdf ugc/b.pdf --force
 ```
 
 ---
