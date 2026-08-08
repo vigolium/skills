@@ -177,6 +177,10 @@ vigolium agent swarm -t https://example.com --source https://github.com/org/repo
 # OpenAPI scan
 vigolium scan -I openapi -i openapi.yaml -t https://api.example.com
 
+# WSDL / SOAP scan (one SOAP POST per operation; a .svc/.asmx URL auto-fetches the WSDL)
+vigolium scan -I wsdl -i service.wsdl -t https://api.example.com
+vigolium scan -i https://api.example.com/Service.svc
+
 # Burp import scan
 vigolium scan -I burp -i burp-export.xml -t https://example.com
 

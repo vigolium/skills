@@ -402,6 +402,19 @@ vigolium traffic -S --db ./scan-target.jsonl --status 500 -n 20
 vigolium finding -S --db ./run.sqlite --json --with-records
 ```
 
+**Pin a session DB with `$VIGOLIUM_DB_PATH`** to avoid repeating `--db` on every
+command. The open order is `--db` → `$VIGOLIUM_DB_PATH` → `database.sqlite.path`
+in config → the built-in default. Setting it also makes **read** commands
+(`finding`/`traffic`/`fuzz -u`) treat that file as a stateless source — project
+scoping off, same as `-S --db` above — while writes still go to it. It never
+turns a *scan* stateless (that would collide with `--db`).
+
+```bash
+export VIGOLIUM_DB_PATH=~/scans/acme.sqlite
+vigolium finding --min-severity high      # reads acme.sqlite, scoping off
+vigolium scan -t https://acme.example     # writes into acme.sqlite
+```
+
 A stateless scan emits that `.sqlite` directly with `--format sqlite` (aliases
 `sqlite3`, `db`) — it dumps the per-run DB via `VACUUM INTO`, fully
 checkpointed, no WAL/SHM sidecars:

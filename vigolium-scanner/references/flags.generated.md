@@ -85,7 +85,7 @@ Persistent flags available on every command.
 |------|-------|------|---------|-------------|
 | `--ci-output-format` | — | bool | `false` | CI-friendly output: JSONL findings only, no color, no banners |
 | `--config` | — | string | — | Path to config file (default "~/.vigolium/vigolium-configs.yaml") |
-| `--db` | — | string | — | Path to SQLite database file (default "~/.vigolium/database-vgnm.sqlite") |
+| `--db` | — | string | — | Path to SQLite database file (default "~/.vigolium/database-vgnm.sqlite"). Also honors $VIGOLIUM_DB_PATH, which additionally reads that file with project scoping off |
 | `--debug` | — | bool | `false` | Enable debug-level logging (includes outgoing HTTP request lines) |
 | `--dump-traffic` | — | bool | `false` | Print every HTTP request/response pair to stderr (Burp-style, bypasses logger) |
 | `--ext` | — | stringArray | — | Load JavaScript extension script (repeatable) |
@@ -186,11 +186,13 @@ Agentic scan: autonomous AI-driven vulnerability scanning
 | `--no-skill-filter` | — | bool | `false` | Load the full skill set; skip the pre-flight skill selection |
 | `--oauth-cred` | — | string | — | Olium OAuth/SA credential file (openai-codex-oauth, anthropic-vertex, or google-vertex; falls back to agent.olium.oauth_cred_path or $GOOGLE_APPLICATION_CREDENTIALS) |
 | `--oauth-token` | — | string | — | Olium Anthropic OAuth bearer token (anthropic-oauth provider; falls back to agent.olium.oauth_token or $ANTHROPIC_API_KEY) |
+| `--output` | `-o` | string | — | Output base path for the --stateless export; each --format appends its own extension (report.html, report.sqlite). Defaults to vigolium-result/vigolium-autopilot. Only applies with -S/--stateless. |
 | `--piolium` | — | string | — | Piolium audit mode: lite, balanced, deep, longshot, etc. Default: empty triggers auto-pick (piolium when pi is installed, else audit). Set explicitly to force piolium; set --audit=off alongside to disable audit |
 | `--plan-file` | — | string | — | Path to a plan file mixing free-text guidance and raw HTTP request(s). Owns the instruction + seed input; cannot be combined with --input or a prompt (--prompt / positional) |
 | `--post-halt-gap-threshold` | — | int | `0` | Minimum new (method, URL) routes the post-halt probe must turn up before the agent is re-entered. 0 = built-in default (5) |
 | `--prior-context` | — | string | `auto` | Front-load a bounded summary of the traffic + findings already in the project DB so the operator mines them instead of starting from scratch: auto (default; the bounded table when prior data exists), summary (one-line pointer), off |
 | `--prompt` | — | string | — | Free-text task guidance for the agent (same as the positional [prompt]; use --plan-file for a whole plan with seed HTTP requests) |
+| `--prompt-file` | — | string | — | Read task guidance from a file (same channel as --prompt — its contents flow through credential extraction, so role-tagged accounts become primary/compare sessions). Convenient for long/complex prompts; mutually exclusive with --prompt, the positional [prompt], and --plan-file |
 | `--provider` | — | string | — | Olium provider override: openai-codex-oauth \| openai-api-key \| openai-responses \| anthropic-api-key \| anthropic-oauth \| anthropic-cli \| anthropic-claude-sdk-bridge \| anthropic-vertex \| google-vertex \| openai-compatible \| anthropic-compatible (falls back to agent.olium.provider config) |
 | `--record-uuid` | — | string | — | Use an HTTP record from the database as the seed input (looked up by UUID) |
 | `--resume` | — | string | — | Resume a previous durable-autopilot run by its agentic-scan UUID: reuses its session dir, project, target, and durable scratchpad/candidates; skips pre-scan and audit re-prep (requires agent.olium.autopilot_mode != legacy) |
@@ -199,6 +201,7 @@ Agentic scan: autonomous AI-driven vulnerability scanning
 | `--skill` | — | stringSlice | — | Force-load these skills by name, bypassing the pre-flight selection (repeatable or comma-separated) |
 | `--skill-tag` | — | stringSlice | — | Force-load every skill carrying one of these tags (e.g. xss,idor) |
 | `--source` | — | string | — | Path to application source code for source-aware scanning |
+| `--stateless` | `-S` | bool | `false` | Run the whole autopilot into a throwaway temporary database (your project DB is left untouched), then materialize --format outputs from it. Mirrors 'vigolium scan -S'. Not valid with --db, --db-isolate, or --resume. |
 | `--system-prompt` | — | string | — | Replace the built-in autopilot system prompt with this value (full replace; browser section is not auto-appended) |
 | `--system-prompt-file` | — | string | — | Path to a file whose contents replace the built-in autopilot system prompt (takes precedence over --system-prompt) |
 | `--target` | `-t` | string | — | Target URL (derived from --input if not set) |
@@ -318,6 +321,7 @@ Agentic scan: AI-guided targeted vulnerability swarm
 | `--probe-timeout` | — | duration | `0s` | Per-request probe timeout (0 = default 10s) |
 | `--profile` | — | string | — | Scanning profile to use |
 | `--prompt` | — | string | — | Free-text task guidance for the agent (same as the positional [prompt]; use --plan-file for a whole plan with seed HTTP requests) |
+| `--prompt-file` | — | string | — | Read task guidance from a file (same channel as --prompt). Convenient for long/complex prompts; mutually exclusive with --prompt, the positional [prompt], and --plan-file |
 | `--provider` | — | string | — | Olium provider override: openai-codex-oauth \| openai-api-key \| openai-responses \| anthropic-api-key \| anthropic-oauth \| anthropic-cli \| anthropic-claude-sdk-bridge \| anthropic-vertex \| google-vertex \| openai-compatible \| anthropic-compatible (falls back to agent.olium.provider config) |
 | `--record-uuid` | — | stringSlice | — | HTTP record UUID from database (repeatable, or comma-separated) |
 | `--records-from` | — | string | — | Filter ingested HTTP records by spec (e.g. "host=example.com,status=200,method=GET,path=/api,since=2026-04-01") |
@@ -454,7 +458,7 @@ Clean database records
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--all` | — | bool | `false` | Delete every row from all data tables (requires --force) |
-| `--before` | — | string | — | Delete records created before this date (YYYY-MM-DD) |
+| `--before` | — | string | — | Delete records created strictly before this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339 (the named day itself is kept) |
 | `--dry-run` | — | bool | `false` | Show what would be deleted without deleting |
 | `--findings-only` | — | bool | `false` | Delete findings only, keep HTTP records |
 | `--host` | — | string | — | Delete records matching the specified hostname |
@@ -469,7 +473,7 @@ Export database records
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--from` | — | string | — | Export records created after this date (YYYY-MM-DD) |
+| `--from` | — | string | — | Export records at or after this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339 (alias: --since) |
 | `--host` | — | string | — | Filter records by hostname pattern |
 | `--limit` | — | int | `0` | Maximum number of records to export, 0 for unlimited |
 | `--method` | — | stringSlice | — | Filter records by HTTP method (can be specified multiple times) |
@@ -480,7 +484,7 @@ Export database records
 | `--request-only` | — | bool | `false` | Export only HTTP requests, omitting responses (raw format only) |
 | `--severity` | — | string | — | Filter findings by severity level |
 | `--status` | — | intSlice | — | Filter records by HTTP status code (can be specified multiple times) |
-| `--to` | — | string | — | Export records created before this date (YYYY-MM-DD) |
+| `--to` | — | string | — | Export records at or before this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339; a bare date covers the whole day (alias: --until) |
 | `--uuid` | — | string | — | Export a single record by its UUID |
 
 ## vigolium db list
@@ -495,7 +499,7 @@ List database records (default: http_records)
 | `--compact` | — | bool | `false` | With --json, emit metadata only (omit request/response bodies). --markdown already compacts response bodies by default; use --full-body to render them whole |
 | `--fields` | — | stringSlice | — | Restrict --json output to these top-level keys (comma-separated, e.g. id,severity,url) |
 | `--finding-source` | — | string | — | Filter findings by source (dynamic-assessment, spa, agent, oast, source-tools, extension) |
-| `--from` | — | string | — | Show records created after this date (YYYY-MM-DD or RFC3339) |
+| `--from` | — | string | — | Show records at or after this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339 (alias: --since) |
 | `--full-body` | — | bool | `false` | Render complete request/response bodies (no truncation/stubbing) with --json, and whole (uncompacted) bodies with --markdown |
 | `--header` | — | string | — | Search within HTTP header names and values |
 | `--host` | — | string | — | Filter records by hostname pattern (wildcard supported) |
@@ -513,7 +517,7 @@ List database records (default: http_records)
 | `--severity` | — | string | — | Filter findings by severity: critical,high,medium,low,suspect,info (comma-separated; single-letter shorthands ok, e.g. 'h,c') |
 | `--sort` | — | string | `created_at` | Sort results by field: uuid, created_at, sent_at, method, status_code, response_time |
 | `--status` | — | intSlice | — | Filter records by HTTP status code (can be specified multiple times) |
-| `--to` | — | string | — | Show records created before this date (YYYY-MM-DD or RFC3339) |
+| `--to` | — | string | — | Show records at or before this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339; a bare date covers the whole day (alias: --until) |
 | `--tree` | — | bool | `false` | Display results in hierarchical tree format |
 
 ## vigolium db stats
@@ -545,7 +549,7 @@ Export database tables and module registry
 | `--limit` | — | int | `0` | Maximum number of records to export per table (0 = unlimited) |
 | `--omit-response` | — | bool | `false` | Omit raw HTTP request/response bytes (keeps metadata, smaller files) |
 | `--only` | — | stringSlice | — | Export only these tables (repeatable: http, findings, scans, modules, oast, source-repos, scopes) |
-| `--output` | `-o` | string | — | Output file path or gs://<project>/<key> URL (required for html); supports {ts} and {project-uuid} placeholders |
+| `--output` | `-o` | string | — | Output file path or gs://<project>/<key> URL (required for html; base path when multiple formats are given); supports {ts} and {project-uuid} placeholders |
 | `--report-duration` | — | string | — | Human-readable scan duration for the report (e.g. "10h42m5s") |
 | `--report-generated-at` | — | string | — | ISO timestamp for report generation (e.g. "2026-04-18T03:00:00Z") |
 | `--report-target` | — | string | — | Target name for the report (e.g. repository name or URL) |
@@ -617,7 +621,7 @@ Browse vulnerability findings with fuzzy search and filtering
 | `--exclude-search` | — | stringArray | — | Exclude findings where the term appears in the module metadata, matched location, or linked request/response (repeatable; dropped if ANY term matches — the inverse of --search) |
 | `--fields` | — | stringSlice | — | Restrict --json output to these top-level keys (comma-separated, e.g. id,severity,url) |
 | `--finding-source` | — | string | — | Filter by finding source (dynamic-assessment, spa, agent, oast, source-tools, extension) |
-| `--from` | — | string | — | Show findings after this date (YYYY-MM-DD or RFC3339) |
+| `--from` | — | string | — | Show findings at or after this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339 (alias: --since) |
 | `--full-body` | — | bool | `false` | Render complete request/response bodies (no truncation/stubbing) with --json, and whole (uncompacted) bodies with --markdown |
 | `--glob-db` | — | string | — | Read across a glob of result files merged into one temporary DB (e.g. --glob-db 'scans/*.sqlite'); implies -S |
 | `--header` | — | string | — | Search within HTTP header names and values |
@@ -643,7 +647,7 @@ Browse vulnerability findings with fuzzy search and filtering
 | `--source` | — | string | — | Filter by record source (e.g. scanner, ingest-cli) |
 | `--stateless` | `-S` | bool | `false` | Read from --db (a .jsonl export or standalone .sqlite) with project scoping off; never writes to your project DB |
 | `--status` | — | intSlice | — | Filter by HTTP status code (repeatable) |
-| `--to` | — | string | — | Show findings before this date (YYYY-MM-DD or RFC3339) |
+| `--to` | — | string | — | Show findings at or before this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339; a bare date covers the whole day (alias: --until) |
 | `--to-repeater` | — | bool | `false` | Push to a Burp Repeater tab instead of the Organizer (respects Burp's 30-tabs/min cap) |
 | `--tree` | — | bool | `false` | Display as a host/path hierarchy tree; repeated titles collapse into one node with each affected URL listed below |
 | `--tui` | — | bool | `false` | Open interactive TUI (arrow keys to navigate, enter to view details, c to copy id) |
@@ -775,7 +779,7 @@ Ingest HTTP requests into database (locally or via server)
 | `--disable-fetch-response` | — | bool | `false` | Store requests without fetching responses during ingestion |
 | `--full-native-scan-on-receive` | — | bool | `false` | Run the full native scan pipeline (discovery + spidering + dynamic-assessment) continuously on received records, instead of dynamic-assessment only |
 | `--input` | `-i` | string | `-` | Input file path or spec (use - for stdin) |
-| `--input-mode` | `-I` | string | `urls` | Input format: urls, openapi, swagger, burp, curl, nuclei, har (see --list-input-mode) |
+| `--input-mode` | `-I` | string | `urls` | Input format: urls, openapi, swagger, wsdl, burp, curl, nuclei, har (see --list-input-mode) |
 | `--input-read-timeout` | — | duration | `3m0s` | Timeout for reading input from stdin or file |
 | `--max-findings-per-module` | — | int | `10` | Stop reporting after N findings per module (0 = unlimited) |
 | `--max-host-error` | — | int | `30` | Skip host after reaching this many consecutive errors |
@@ -937,7 +941,7 @@ Re-send a stored or supplied HTTP request and diff baseline vs replay
 | `--exclude-header-search` | — | string | — | Bulk: drop records whose HTTP header names/values contain the term (inverse of --header-search) |
 | `--exclude-search` | — | stringArray | — | Bulk: drop records where the term appears in the URL, path, or raw request/response (repeatable; dropped if ANY term matches — inverse of --search) |
 | `--finding-id` | — | int64 | `0` | Finding ID — replay the finding's linked record (or its stored evidence) |
-| `--from` | — | string | — | Bulk: only records after this date (YYYY-MM-DD or RFC3339) |
+| `--from` | — | string | — | Bulk: only records at or after this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339 (alias: --since) |
 | `--header` | `-H` | stringArray | — | Extra request header 'Name: value' (repeatable, overrides baseline) |
 | `--header-search` | — | string | — | Bulk: filter records by text in HTTP header names/values (the search filter `traffic --header` applies; -H/--header overrides headers instead) |
 | `--highlight` | — | string | — | Highlight colour for the --to-organizer item: none\|red\|orange\|yellow\|green\|cyan\|blue\|pink\|magenta\|gray |
@@ -970,7 +974,7 @@ Re-send a stored or supplied HTTP request and diff baseline vs replay
 | `--status` | — | intSlice | — | Bulk: filter records by stored status code (repeatable) |
 | `--target` | `-t` | string | — | Override scheme/host/port (e.g. https://staging.example.com) |
 | `--timeout` | — | duration | `25s` | Per-request timeout (e.g. 30s, 1m) |
-| `--to` | — | string | — | Bulk: only records before this date (YYYY-MM-DD or RFC3339) |
+| `--to` | — | string | — | Bulk: only records at or before this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339; a bare date covers the whole day (alias: --until) |
 | `--to-organizer` | — | bool | `false` | Store the replayed request + response in Burp's Organizer for manual follow-up; requires --burp-bridge-url |
 | `--to-repeater` | — | bool | `false` | Stage the replayed request in a Burp Repeater tab for manual testing; requires --burp-bridge-url |
 | `--with-browser` | — | bool | `false` | Load each record's URL in a real browser routed via --proxy so an intercepting proxy captures browser-driven traffic; navigation-only, so no baseline-vs-replay diff is produced |
@@ -1000,7 +1004,7 @@ Run a single native scan phase (alias for scan --only <phase>)
 | `--heuristics-check` | — | string | — | Pre-scan heuristics level: none, basic, advanced (default: basic) |
 | `--include-response` | — | bool | `false` | Include full HTTP response body in output |
 | `--input` | `-i` | string | `-` | Input file path or spec (use - for stdin) |
-| `--input-mode` | `-I` | string | `urls` | Input format: urls, openapi, swagger, burp, curl, nuclei, har (see --list-input-mode) |
+| `--input-mode` | `-I` | string | `urls` | Input format: urls, openapi, swagger, wsdl, burp, curl, nuclei, har (see --list-input-mode) |
 | `--input-read-timeout` | — | duration | `3m0s` | Timeout for reading input from stdin or file |
 | `--intensity` | — | string | — | Scan intensity preset: quick, balanced, or deep (maps to scanning profile + strategy) |
 | `--known-issue-scan-exclude-tags` | — | stringSlice | — | Nuclei template tags to exclude (comma-separated) |
@@ -1080,7 +1084,7 @@ Run a native scan — deterministic multi-phase vulnerability scanning
 | `--heuristics-check` | — | string | — | Pre-scan heuristics level: none, basic, advanced (default: basic) |
 | `--include-response` | — | bool | `false` | Include full HTTP response body in output |
 | `--input` | `-i` | string | `-` | Input file path or spec (use - for stdin) |
-| `--input-mode` | `-I` | string | `urls` | Input format: urls, openapi, swagger, burp, curl, nuclei, har (see --list-input-mode) |
+| `--input-mode` | `-I` | string | `urls` | Input format: urls, openapi, swagger, wsdl, burp, curl, nuclei, har (see --list-input-mode) |
 | `--input-read-timeout` | — | duration | `3m0s` | Timeout for reading input from stdin or file |
 | `--intensity` | — | string | — | Scan intensity preset: quick, balanced, or deep (maps to scanning profile + strategy) |
 | `--known-issue-scan-exclude-tags` | — | stringSlice | — | Nuclei template tags to exclude (comma-separated) |
@@ -1320,7 +1324,7 @@ Browse or replay HTTP traffic (alias: db ls --table http_records)
 | `--exclude-header` | — | string | — | Exclude records whose HTTP header names/values contain the term (inverse of --header) |
 | `--exclude-search` | — | stringArray | — | Exclude records where the term appears in the URL, path, or raw request/response (repeatable; dropped if ANY term matches — the inverse of --search) |
 | `--fields` | — | stringSlice | — | Restrict --json output to these top-level keys (comma-separated, e.g. id,severity,url) |
-| `--from` | — | string | — | Show records after this date (YYYY-MM-DD or RFC3339) |
+| `--from` | — | string | — | Show records at or after this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339 (alias: --since) |
 | `--full-body` | — | bool | `false` | Render complete request/response bodies (no truncation/stubbing) with --json, and whole (uncompacted) bodies with --markdown |
 | `--glob-db` | — | string | — | Read across a glob of result files merged into one temporary DB (e.g. --glob-db 'scans/*.sqlite'); implies -S |
 | `--header` | — | string | — | Search within HTTP header names and values |
@@ -1342,7 +1346,7 @@ Browse or replay HTTP traffic (alias: db ls --table http_records)
 | `--stateless` | `-S` | bool | `false` | Read from --db (a .jsonl export or standalone .sqlite) with project scoping off; never writes to your project DB |
 | `--status` | — | intSlice | — | Filter by HTTP status code (repeatable, e.g. --status 200 --status 404) |
 | `--timeout` | — | duration | `15s` | Per-request timeout for --replay (e.g. 30s, 1m) |
-| `--to` | — | string | — | Show records before this date (YYYY-MM-DD or RFC3339) |
+| `--to` | — | string | — | Show records at or before this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339; a bare date covers the whole day (alias: --until) |
 | `--tree` | — | bool | `false` | Display as host/path hierarchy tree |
 | `--tui` | — | bool | `false` | Open interactive TUI (arrow keys to navigate, enter to view details, c to copy id) |
 | `--with-browser` | — | bool | `false` | Replay each URL through a real browser routed via --proxy (--replay), so Burp captures browser-driven traffic |

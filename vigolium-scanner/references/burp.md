@@ -1,6 +1,6 @@
 # Burp Suite integration
 
-> **Related:** [agent-loop.md](agent-loop.md) · [fuzzing.md](fuzzing.md) · [data.md](data.md) · [server-ingest.md](server-ingest.md) · [flags.generated.md](flags.generated.md)
+> **Related:** [agent-loop.md](agent-loop.md) · [fuzzing.md](fuzzing.md) · [data.md](data.md) · [server.md](server.md) · [ingest.md](ingest.md) · [flags.generated.md](flags.generated.md)
 
 Vigolium and Burp are complementary: vigolium scans at scale and stores
 everything in a queryable database; Burp is where a human does manual work.

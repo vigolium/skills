@@ -6,6 +6,7 @@ Complete reference for `init`, `import`, `log`, `doctor`, `db`, `finding`, `modu
 
 ## Table of Contents
 
+- [Time filters (shared)](#time-filters)
 - [init](#init)
 - [import](#import)
 - [log](#log)
@@ -18,6 +19,8 @@ Complete reference for `init`, `import`, `log`, `doctor`, `db`, `finding`, `modu
 - [db seed](#db-seed)
 - [finding](#finding)
 - [finding load](#finding-load)
+- [traffic](#traffic)
+- [traffic --replay](#traffic---replay)
 - [export (top-level)](#export)
 - [module](#module)
 - [extensions](#extensions)
@@ -37,6 +40,32 @@ Complete reference for `init`, `import`, `log`, `doctor`, `db`, `finding`, `modu
 - [storage rm](#storage-rm)
 - [strategy](#strategy)
 - [version](#version)
+
+---
+
+## Time filters
+
+`--from`/`--to` (aliases `--since`/`--until`) narrow `finding`, `traffic`,
+`db ls`, `db export`, and `replay` to a date window; `db clean --before` takes the
+same values. They all share one parser, which accepts more than the tables below
+imply:
+
+- **Relative offsets** — `2d`, `12h`, `30m`, `1w`, compound `1h30m`, optional trailing `ago` (`3h ago`)
+- **Keywords** — `today`, `yesterday`, `now`
+- **Absolute** — `YYYY-MM-DD`, `"YYYY-MM-DD HH:MM[:SS]"`, or full RFC3339
+
+Three contracts worth knowing:
+
+- Bare dates and wall-clock times resolve in your **local** zone, so `--since today` covers the local day (not UTC midnight).
+- A bare date on the **upper** bound snaps to end-of-day, so `--from D --to D` is the whole of day D. (`db clean --before D` is the exception — no snap, so day D itself survives the delete.)
+- An inverted range (`--from` later than `--to`) is a hard error, not silently-empty output.
+
+```bash
+vigolium finding --since 2d --min-severity high      # findings from the last 48h
+vigolium traffic --since today --status 500          # today's 5xx responses
+vigolium traffic --from 2026-08-01 --to 2026-08-01   # everything on Aug 1 (local)
+vigolium db clean --before 30d --force               # prune records older than 30 days
+```
 
 ---
 
@@ -97,7 +126,7 @@ vigolium import ./src/vigolium-results --format html -o audit-report.html
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--format` | — | string | — | Also write a report after import: `html`, `report`, `pdf`, or `markdown` (`md`). Mirrors `vigolium export --format` |
+| `--format` | — | string | — | Also write a report after import: `html`, `report`, `pdf`, or `markdown` (`md`). Same generators as `vigolium export --format`, but one value only (no comma list) |
 | `--output` | `-o` | string | — | Report output path or `gs://<project>/<key>` URL (required when `--format` is set; supports `{ts}`) |
 | `--glob-db` | — | string | — | Glob of local files to import alongside any positional paths (one format per run) |
 | `--burp-bridge-url` | `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Import live Burp Proxy history from this loopback bridge URL |
@@ -501,6 +530,117 @@ cat findings.jsonl | vigolium finding load
 
 ---
 
+## traffic
+
+**Usage:** `vigolium traffic [search-term] [flags]`
+
+**Aliases:** `traffics`, `tf`
+
+Browse stored HTTP traffic. Shortcut for `vigolium db ls http_records`. To load
+traffic in, see [ingest.md](ingest.md) / [server.md](server.md); to re-send it,
+see [agent-loop.md](agent-loop.md) → *Bulk replay*.
+
+### Filter flags (persistent, inherited by replay)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--host` | string | — | Filter by hostname pattern (wildcard supported) |
+| `--method` | []string | — | Filter by HTTP method (repeatable, e.g. --method GET --method POST) |
+| `--status` | []int | — | Filter by HTTP status code (repeatable, e.g. --status 200 --status 404) |
+| `--path` | string | — | Filter by URL path pattern |
+| `--from` | string | — | Show records after this date (YYYY-MM-DD or RFC3339) |
+| `--to` | string | — | Show records before this date (YYYY-MM-DD or RFC3339) |
+| `--search` | string | — | Fuzzy search across URLs, paths, and hostnames |
+| `--header` | string | — | Search within HTTP header names and values |
+| `--body` | string | — | Search within HTTP request/response body content |
+| `--source` | string | — | Filter by record source (e.g. scanner, ingest-cli, ingest-server, ingest-proxy, seed) |
+| `--sort` | string | `created_at` | Sort field: uuid, created_at, sent_at, method, status, time |
+| `--asc` | bool | `false` | Sort in ascending order (default: descending) |
+| `--limit` / `-n` | int | `100` | Maximum records to display |
+| `--offset` | int | `0` | Number of records to skip (for pagination) |
+
+### Display flags (traffic only)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--tree` | bool | `false` | Display as host/path hierarchy tree |
+| `--raw` | bool | `false` | Full raw HTTP request and response |
+| `--burp` | bool | `false` | Burp Suite-style colored format |
+| `--markdown` | bool | `false` | Render matched records as Markdown (request/response in fenced http blocks) to stdout |
+| `--columns` | []string | — | Columns to show (comma-separated, e.g. HOST,METHOD,PATH,STATUS) |
+| `--exclude-columns` | []string | — | Columns to hide (comma-separated) |
+| `--exclude-search` / `--exclude-header` / `--exclude-body` | []string / string | — | Inverse-search filters (drop records where the term appears) |
+| `--stateless` / `-S` + `--glob-db` | bool / string | — | Read from a `.jsonl`/`.sqlite` export (or a glob merged into one temp DB) with project scoping off |
+
+With `-j`/`--json`, `traffic` emits **one compact, token-aware object** (headers kept, bodies preview-capped, binary/static stubbed) built for coding-agent consumption. Shape it with `--compact` (metadata only), `--fields a,b,c` (project top-level keys), or `--full-body` (complete bodies) — the same contract as `finding`/`db ls`.
+
+### Available Columns
+
+UUID, HOST, METHOD, PATH, STATUS, TIME, SIZE, WORDS, CONTENT_TYPE, SENT_AT, TITLE, AUTH, STATUS_PHRASE, REQ_HEADERS, RESP_HEADERS, SOURCE, REMARKS
+
+Default columns: HOST, METHOD, PATH, STATUS, CONTENT_TYPE, SIZE, WORDS, TIME, TITLE, SOURCE
+
+### Argument Routing
+
+- `vigolium traffic` — default table view
+- `vigolium traffic <term>` — fuzzy search
+- `vigolium traffic tree` — tree view
+- `vigolium traffic list` or `ls` — default table view
+
+### Examples
+
+```bash
+# Browse all traffic
+vigolium traffic
+
+# Fuzzy search
+vigolium traffic login
+vigolium traffic api/v2
+
+# Tree view
+vigolium traffic --tree
+
+# Burp-style output
+vigolium traffic --burp
+
+# Filter by host and method
+vigolium traffic --host api.example.com --method POST,PUT
+
+# Filter by status code
+vigolium traffic --status 200,301
+
+# Date range
+vigolium traffic --from 2024-01-01 --to 2024-06-30
+
+# Only records that came in from the recording proxy
+vigolium traffic --source ingest-proxy --tree
+
+# Custom columns
+vigolium traffic --columns HOST,METHOD,PATH,STATUS,AUTH
+```
+
+---
+
+## traffic --replay
+
+Re-sending stored traffic — both `traffic --replay` (human comparison table,
+`--with-browser`) and the top-level `vigolium replay` (structured JSONL diffs) —
+is documented with the rest of the confirm/hand-off workflow in
+**[agent-loop.md](agent-loop.md)** → *Bulk replay*.
+
+Burp-bridge **listing** sync flags stay here because they operate on the
+`traffic` listing, not on replay:
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--burp-bridge-url` / `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Merge live traffic from this loopback Burp bridge URL with local DB records |
+| `--save-to-vigolium-db` | bool | `false` | Persist the live Burp records selected by the active filters into the database (requires `--burp-bridge-url`; not with `--replay`) |
+| `--save-to-burp` | bool | `false` | Copy the DB records selected by the active filters into Burp's Target site map (requires `--burp-bridge-url`; not with `--replay`) |
+
+The two `--save-to-*` flags are mutually exclusive with `--replay`.
+
+---
+
 ## export
 
 **Usage:** `vigolium export [flags]`
@@ -511,7 +651,7 @@ Top-level export command. Exports database tables and module registry as JSONL, 
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--format` | — | string | `jsonl` | Format: `html`, `report`, `pdf`, `jsonl`, `markdown` (alias `md`), `bundle` (alias `gz`), `fs` (flat request/response + finding tree) |
+| `--format` | — | string | `jsonl` | Format(s), comma-separated: `html`, `report`, `pdf`, `jsonl`, `markdown` (alias `md`), `bundle` (alias `gz`), `fs` (flat request/response + finding tree). Multiple formats read the DB once; `-o` becomes the shared base path and each format appends its own extension |
 | `--output` | `-o` | string | — | Output file or `gs://<project>/<key>` URL (required for html); supports `{ts}`/`{project-uuid}` placeholders |
 | `--only` | — | []string | all | Export only these tables (repeatable: http, findings, scans, modules, oast, source-repos, scopes) |
 | `--exclude` | — | []string | `[module]` | Exclude items by type (comma-separated, e.g. `module,scan`) |
@@ -531,6 +671,7 @@ vigolium export --format jsonl --only findings
 vigolium export --format jsonl --only findings,http
 vigolium export --format html -o report.html
 vigolium export --format fs -o run
+vigolium export --format html,markdown,bundle -o run   # → run.html, run.md, run.tar.gz (one DB read)
 vigolium export --only modules
 vigolium export --omit-response --only http -o urls.jsonl
 vigolium export --search "example.com" -o filtered.jsonl

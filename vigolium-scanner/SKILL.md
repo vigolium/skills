@@ -78,6 +78,8 @@ from an agent.
 | Scan a single URL with custom method/headers | `vigolium scan-url <url> --method POST --body '...'` |
 | Scan a raw HTTP request from file/stdin | `vigolium scan-request -i request.txt` |
 | Run only one scan phase | `vigolium run <phase>` or `scan --only <phase>` |
+| Tune scan aggressiveness (phases + profile) | `vigolium scan -t <url> --intensity quick\|balanced\|deep` |
+| Content discovery with a custom wordlist | `vigolium scan -t <url> --discover --fuzz-wordlist ./words.txt` |
 | Import an OpenAPI/Swagger spec and scan | `vigolium scan -I openapi -i spec.yaml -t <base-url>` |
 | Import Burp/HAR/cURL traffic | `vigolium scan -I burp -i export.xml` |
 | Filter modules by tag | `vigolium scan -t <url> --module-tag spring --module-tag injection` |
@@ -142,7 +144,8 @@ Load the file that matches the task — don't read them all.
 | AI agent modes | `references/agent-modes.md` | agent query / autopilot / swarm / audit / olium / triage / session, intensities, providers, templates |
 | Auth & sessions | `references/auth.md` | `--auth-file` / `--auth`, YAML format, extract rules, authenticated scanning |
 | Data & management | `references/data.md` | db, finding, traffic, module, extensions, js, config, scope, export, import, log, project, storage |
-| Server & ingestion | `references/server-ingest.md` | server, ingest, proxy capture, live mirror |
+| Server mode | `references/server.md` | `vigolium server` — REST API, recording/MITM proxy, scan-on-receive, live mirror, endpoints |
+| Ingesting traffic | `references/ingest.md` | `vigolium ingest` — local/remote, per-format input examples, spec flags |
 | Writing extensions | `references/extensions.md` | custom JS scanner modules, `vigolium.*` API |
 | Any specific flag | `references/flags.generated.md` | generated from the command tree — grep it by flag name |
 
@@ -184,6 +187,12 @@ Things `-h` won't tell you:
 
 - **`-S` is two different flags.** `--stateless` on `scan`/`export`/`finding`/
   `replay`/`agent audit`; `--scan-on-receive` on `server`/`ingest`.
+- **Which DB a command opens:** `--db` → `$VIGOLIUM_DB_PATH` →
+  `database.sqlite.path` in config → the built-in default. Pinning
+  `$VIGOLIUM_DB_PATH` also makes **read** commands (`finding`/`traffic`/`fuzz -u`)
+  treat that file as a stateless source — project scoping off — so an agent can
+  export it once and every read/write lands in the same session DB. It never
+  turns a *scan* stateless (that would clash with `--db`).
 - `--only` and `--skip` are mutually exclusive.
 - `--format html`, `--format sqlite`, and any multi-value `--format` need a file
   destination: pass `-o/--output` **or** `--split-by-host` (which names per-host
@@ -208,6 +217,10 @@ Things `-h` won't tell you:
 - `fuzz` emits **no findings** and makes no verdict; it reports signals. Reach for
   `-a/--anomaly` before hand-writing matchers, then confirm hits with
   `scan-request -m <module>`.
+- **Two wordlist knobs, not interchangeable.** `--fuzz-wordlist <path>` seeds the
+  *discovery* phase (`scan --discover`); `vigolium fuzz -w <builtin|path>` is the
+  standalone fuzzing primitive with its own builtin lists (`dir-short`,
+  `file-long`, …). See `references/fuzzing.md` for the latter.
 - `traffic --replay` is a shortcut for `replay` in bulk mode; only `replay` can
   change the request (`-H`, `--auth-session`, `--target`, `--session-id`).
 - On `replay`, `-H/--header` **overrides** a header and `--header-search`
@@ -231,6 +244,12 @@ Strategies control which phases run. Use `--strategy <name>`.
 Default lives in `scanning_strategy.default_strategy`. Print the table with
 `vigolium strategy` (no `ls` subcommand).
 
+**Intensity** is the one-flag shortcut on top of strategies:
+`--intensity quick|balanced|deep` maps to a scanning profile **and** strategy in a
+single flag (also honored by `agent autopilot`/`swarm`). Explicit flags always
+override it — `--intensity deep --scanning-profile foo` keeps `deep`'s strategy
+but your profile. Full precedence: `references/scanning.md`.
+
 ## Scan phases
 
 Use `--only <phase>` to isolate one or `--skip <phase>` to drop some.
@@ -249,22 +268,26 @@ Run one directly: `vigolium run discover -t <url>`.
 
 ## Input formats
 
-`-I <format>` selects the input type; OpenAPI specs auto-detect.
+`-I <format>` selects the input type; OpenAPI and WSDL auto-detect from content.
 
 | Format | Flag | Example |
 |--------|------|---------|
 | URLs *(default)* | `-I urls` | `-t https://target.example` or `-T targets.txt` |
 | OpenAPI 3.x | `-I openapi` | `-I openapi -i spec.yaml -t https://api.target.example` |
 | Swagger 2.0 | `-I swagger` | `-I swagger -i swagger.json` |
+| WSDL / SOAP | `-I wsdl` | `-I wsdl -i service.wsdl -t https://soap.target.example` — one SOAP POST per operation; a `.svc`/`.asmx` URL auto-fetches its WSDL |
 | Burp XML | `-I burp` | `-I burp -i burp-export.xml` |
 | cURL commands | `-I curl` | `-I curl -i requests.txt` |
 | Nuclei templates | `-I nuclei` | `-I nuclei -i templates/` |
 | HAR archive | `-I har` | `-I har -i traffic.har` |
 | Postman collection | `-I postman` | `-I postman -i collection.json` |
+| Burp scope export | `-I burpscope` | `-I burpscope -i burp-scope.json` — expands a program's scope into seed URLs (content-sniffed on `-T` too) |
 | stdin | — | `cat urls.txt \| vigolium scan -i -` |
 
 OpenAPI extras: `--spec-url` (use servers from the spec), `--spec-header`
 (auth), `--spec-var` (parameter values), `--spec-default` (fallback).
+WSDL reuses `--spec-header` (auth) and `--spec-var` (override a body element by
+its local name); `-t` overrides only the endpoint host, keeping the WSDL path.
 
 ## Output formats
 
