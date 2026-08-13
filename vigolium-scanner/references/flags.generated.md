@@ -48,6 +48,14 @@ run `vigolium <command> -h`.
 - [vigolium import](#vigolium-import)
 - [vigolium ingest](#vigolium-ingest)
 - [vigolium js](#vigolium-js)
+- [vigolium kit harvest](#vigolium-kit-harvest)
+- [vigolium kit js-beautify](#vigolium-kit-js-beautify)
+- [vigolium kit jwt-crack](#vigolium-kit-jwt-crack)
+- [vigolium kit oast](#vigolium-kit-oast)
+- [vigolium kit oast new](#vigolium-kit-oast-new)
+- [vigolium kit oast poll](#vigolium-kit-oast-poll)
+- [vigolium kit payload](#vigolium-kit-payload)
+- [vigolium kit secret-scan](#vigolium-kit-secret-scan)
 - [vigolium log](#vigolium-log)
 - [vigolium log ls](#vigolium-log-ls)
 - [vigolium module](#vigolium-module)
@@ -91,7 +99,7 @@ Persistent flags available on every command.
 | `--ext` | — | stringArray | — | Load JavaScript extension script (repeatable) |
 | `--ext-dir` | — | string | — | Override extension scripts directory |
 | `--force` | — | bool | `false` | Skip confirmation prompts |
-| `--format` | — | string | `console` | Output format (comma-separated for multiple): console, jsonl, html, sqlite (needs -S), fs (flat traffic/finding tree) |
+| `--format` | — | string | `console` | Output format (comma-separated for multiple): console, jsonl, html, sarif, sqlite (needs -S), fs (alias: file-system; flat traffic/finding tree) |
 | `--full-example` | — | bool | `false` | Show full example commands organized by section |
 | `--json` | `-j` | bool | `false` | Emit machine-readable JSON for agent/programmatic use (compact bodies; pair with --fields/--compact/--full-body on finding/traffic/db). For the bulk {type,data} stream use --format jsonl / export. |
 | `--list-input-mode` | — | bool | `false` | List all supported input modes with examples |
@@ -165,7 +173,7 @@ Agentic scan: autonomous AI-driven vulnerability scanning
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--audit` | — | string | `lite` | vigolium-audit mode: lite (3-phase), balanced (9-phase), deep (12-phase), mock (sample output), or off (disable). Default: lite when --source is set |
-| `--burp-bridge-url` | `-B` | string | — | Pull live Burp Proxy history into the project DB before the run (e.g. http://127.0.0.1:9009), so the pre-scan and operator can mine it alongside prior traffic. Also honors $VIGOLIUM_BURP_BRIDGE_URL |
+| `--burp-bridge-url` | `-B` | string | — | Pull live Burp/Caido proxy history into the project DB before the run (e.g. http://127.0.0.1:9009), so the pre-scan and operator can mine it alongside prior traffic. Also honors $VIGOLIUM_BURP_BRIDGE_URL (alias: --caido-bridge-url) |
 | `--db-isolate` | — | bool | `false` | Run into a private temporary database, then merge results into --db (or the default DB) at the end — lets parallel runs share one --db without write contention (SQLite only) |
 | `--diff` | — | string | — | Focus on changed code: PR URL (github.com/.../pull/123), git ref range (main...branch), or HEAD~N |
 | `--disable-guardrail` | — | bool | `false` | Skip the prompt-safety classifier on the natural-language prompt (use only when refusing a known-good prompt) |
@@ -611,7 +619,7 @@ Browse vulnerability findings with fuzzy search and filtering
 | `--asc` | — | bool | `false` | Sort in ascending order (default: descending) |
 | `--body` | — | string | — | Search within HTTP request/response body content |
 | `--burp` | — | bool | `false` | Display in Burp Suite-style format (colored request/response) |
-| `--burp-bridge-url` | `-B` | string | — | Loopback Burp bridge URL used by --push-to-burp / --to-repeater |
+| `--burp-bridge-url` | `-B` | string | — | Loopback Burp/Caido bridge URL used by --push-to-burp / --to-repeater (alias: --caido-bridge-url) |
 | `--columns` | — | stringSlice | — | Columns to show (comma-separated, e.g. ID,SEVERITY,MODULE) |
 | `--compact` | — | bool | `false` | With --json, emit metadata only (omit request/response bodies). --markdown already compacts response bodies by default; use --full-body to render them whole |
 | `--confidence` | — | string | — | Filter by confidence: certain,firm,tentative (comma-separated) |
@@ -673,7 +681,7 @@ Inject payloads into a request and report per-payload response anomalies
 | `--anomaly-threshold` | — | string | `medium` | How strong a signal must be to report: low\|medium\|high, or a number |
 | `--auth-session` | — | string | — | Auth session name whose headers are merged in (from 'vigolium auth list') |
 | `--baseline-samples` | — | int | `0` | Send the un-fuzzed request this many times to measure timing jitter, enabling time_z (default 1, or 3 with --anomaly) |
-| `--burp-bridge-url` | `-B` | string | — | Loopback Burp bridge URL used by --send-via-burp / --matches-to-organizer |
+| `--burp-bridge-url` | `-B` | string | — | Loopback Burp/Caido bridge URL used by --send-via-burp / --matches-to-organizer (alias: --caido-bridge-url) |
 | `--cacert` | — | string | — | CA bundle used to verify the target (implies --verify-tls) |
 | `--cert` | — | string | — | Client certificate file (PEM), curl's -E |
 | `--class` | — | stringSlice | — | Built-in payload class to inject: cmdi,crlf,lfi,open_redirect,path_traversal,sqli,ssrf,ssti,xss,xxe (comma-list) |
@@ -756,7 +764,7 @@ Import scan data, databases, or live Burp Proxy history
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--burp-bridge-url` | `-B` | string | — | Import live Burp Proxy history from this loopback bridge URL into the database |
+| `--burp-bridge-url` | `-B` | string | — | Import live Burp/Caido proxy history from this loopback bridge URL into the database (alias: --caido-bridge-url) |
 | `--glob-db` | — | string | — | Glob of local files to import alongside any positional paths (use one format per run), e.g. --glob-db 'prefix-*.sqlite' or '*.jsonl' |
 | `--output` | `-o` | string | — | Report output path or gs://<project>/<key> URL (required when --format is set; supports {ts}) |
 | `--report-duration` | — | string | — | Human-readable scan duration for the report (e.g. "10h42m5s") |
@@ -811,6 +819,84 @@ Execute JavaScript with the full vigolium.* API
 | `--code-file` | — | string | — | Path to JavaScript/TypeScript file to execute |
 | `--target` | — | string | — | Set TARGET variable in JS scope (URL) |
 | `--timeout` | — | duration | `30s` | Execution timeout |
+
+## vigolium kit harvest
+
+Collect known URLs for a domain from public archives and indexes
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--source` | — | stringSlice | — | Override sources (comma-separated): wayback, commoncrawl, alienvault, arquivo, urlscan, virustotal |
+| `--timeout` | — | duration | `5m0s` | Overall harvest timeout |
+
+## vigolium kit js-beautify
+
+Unminify and unpack a JavaScript bundle into readable source
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--extract` | — | bool | `false` | Also extract endpoints/requests (a full analysis pass); included in -j output |
+| `--timeout` | — | duration | `30s` | Timeout for fetching a URL argument |
+
+## vigolium kit jwt-crack
+
+Recover a JWT's HMAC signing secret from a wordlist
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--fail-on-crack` | — | bool | `false` | Exit 3 when the secret is recovered (for CI/agent gating) |
+| `--secret` | `-p` | stringArray | — | Additional inline candidate secret (repeatable) |
+| `--wordlist` | `-w` | string | — | Wordlist: a built-in name (see `kit wordlist`) or a file path (default: embedded jwt.secrets.list) |
+
+## vigolium kit oast
+
+Mint out-of-band (OOB/OAST) callback URLs and drain their interactions
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--session` | `-o` | string | `oast-session.yaml` | Session file path (holds the interactsh keys/correlation id) |
+
+## vigolium kit oast new
+
+Register an OAST session and mint one or more callback URLs
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--count` | `-n` | int | `1` | Number of callback URLs to mint |
+| `--server` | — | string | `oast.pro` | interactsh server URL |
+| `--token` | — | string | — | interactsh auth token (for a self-hosted server) |
+
+## vigolium kit oast poll
+
+Poll a saved OAST session for received interactions
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--deregister` | — | bool | `false` | After draining, deregister the session server-side and delete the session file |
+| `--interval` | — | duration | `5s` | Polling interval (auto-shrunk if larger than --wait) |
+| `--wait` | — | duration | `15s` | How long to poll for interactions before exiting |
+
+## vigolium kit payload
+
+Emit built-in payload sets by vulnerability class
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--class` | `-c` | stringSlice | — | Vulnerability class(es), comma-separated (see --list) |
+| `--list` | — | bool | `false` | List available payload classes |
+
+## vigolium kit secret-scan
+
+Scan files or stdin for leaked credentials using the built-in secret catalog
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--exclude-rule` | — | stringSlice | — | Skip these rule IDs (comma-separated / repeatable) |
+| `--fail-on-match` | — | bool | `false` | Exit 3 when at least one secret is found (for CI/agent gating) |
+| `--max-file-size` | — | int64 | `16777216` | Skip files larger than this many bytes |
+| `--min-confidence` | — | string | `low` | Minimum confidence to report: low, medium, high |
+| `--redact` | — | bool | `false` | Mask the secret value in output (show only a prefix/suffix) |
+| `--rule` | — | stringSlice | — | Only report these rule IDs (comma-separated / repeatable) |
 
 ## vigolium log
 
@@ -935,7 +1021,7 @@ Re-send a stored or supplied HTTP request and diff baseline vs replay
 | `--asc` | — | bool | `false` | Bulk: sort ascending (default: descending) |
 | `--auth-session` | — | string | — | Auth session name to merge headers from (from 'vigolium auth list') |
 | `--body` | — | string | — | Bulk: filter records whose request/response body contains this text |
-| `--burp-bridge-url` | `-B` | string | — | Loopback Burp bridge URL used by --save-to-burp / --send-via-burp / --to-repeater / --to-organizer |
+| `--burp-bridge-url` | `-B` | string | — | Loopback Burp/Caido bridge URL used by --save-to-burp / --send-via-burp / --to-repeater / --to-organizer (alias: --caido-bridge-url) |
 | `--concurrency` | `-c` | int | `10` | Bulk: concurrent replays; keep low to avoid overwhelming an intercepting proxy like Burp |
 | `--exclude-body` | — | string | — | Bulk: drop records whose request/response body contains the term (inverse of --body) |
 | `--exclude-header-search` | — | string | — | Bulk: drop records whose HTTP header names/values contain the term (inverse of --header-search) |
@@ -969,7 +1055,7 @@ Re-send a stored or supplied HTTP request and diff baseline vs replay
 | `--send-via-burp` | — | bool | `false` | Send the request through Burp's own HTTP stack (exact bytes — malformed/smuggling preserved) instead of Go's client; requires --burp-bridge-url |
 | `--session-id` | — | string | — | Persist cookies across calls under ~/.vigolium/replay-jars/<id>.json |
 | `--sort` | — | string | `created_at` | Bulk: sort matched records by: uuid, created_at, sent_at, method, status, time |
-| `--source` | — | string | — | Bulk: filter records by source (scanner, ingest-cli, ingest-proxy, seed, ...) |
+| `--source` | — | string | — | Bulk: filter records by source (burp, caido, scanner, ingest-cli, ingest-proxy, seed, ...) |
 | `--stateless` | `-S` | bool | `false` | Read records from --db (a .jsonl export or standalone .sqlite) with project scoping off; never writes to your project DB |
 | `--status` | — | intSlice | — | Bulk: filter records by stored status code (repeatable) |
 | `--target` | `-t` | string | — | Override scheme/host/port (e.g. https://staging.example.com) |
@@ -1218,7 +1304,7 @@ Start API server
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--alternative-ingest-key` | — | stringSlice | — | Additional API key for ingestion endpoints (repeatable) |
-| `--burp-bridge-url` | `-B` | string | — | Merge live Burp traffic from this loopback bridge URL into /api/http-records |
+| `--burp-bridge-url` | `-B` | string | — | Merge live proxy traffic from this loopback Burp/Caido bridge URL into /api/http-records (alias: --caido-bridge-url) |
 | `--catchup-threads` | — | int | `4` | Deprecated: no-op (catch-up scanning is disabled) |
 | `--demo-only` | — | bool | `false` | Expose only the demo allowlist: GET /api/findings[/:id], /api/http-records[/:uuid], /api/modules, /api/stats, /api/extensions[/:name\|/docs] |
 | `--disable-catchup` | — | bool | `false` | Deprecated: no-op (catch-up scanning is already disabled) |
@@ -1315,7 +1401,7 @@ Browse or replay HTTP traffic (alias: db ls --table http_records)
 | `--asc` | — | bool | `false` | Sort in ascending order (default: descending) |
 | `--body` | — | string | — | Search within HTTP request/response body content |
 | `--burp` | — | bool | `false` | Display in Burp Suite-style format (colored request/response) |
-| `--burp-bridge-url` | `-B` | string | — | Merge live traffic from this loopback Burp bridge URL with local database records |
+| `--burp-bridge-url` | `-B` | string | — | Merge live traffic from this loopback Burp/Caido bridge URL with local database records (alias: --caido-bridge-url) |
 | `--columns` | — | stringSlice | — | Columns to show (comma-separated, e.g. HOST,METHOD,PATH,STATUS) |
 | `--compact` | — | bool | `false` | With --json, emit metadata only (omit request/response bodies). --markdown already compacts response bodies by default; use --full-body to render them whole |
 | `--concurrency` | `-c` | int | `10` | Concurrent replays (--replay); keep low to avoid overwhelming an intercepting proxy like Burp |
@@ -1342,7 +1428,7 @@ Browse or replay HTTP traffic (alias: db ls --table http_records)
 | `--save-to-vigolium-db` | — | bool | `false` | Persist the live Burp records selected by the active filters into the database |
 | `--search` | — | stringArray | — | Search across URL, path, and the raw request/response (headers + body); repeatable, AND-combined (each term further narrows) |
 | `--sort` | — | string | `created_at` | Sort by: uuid, created_at, sent_at, method, status, time |
-| `--source` | — | string | — | Filter by record source (e.g. burp, scanner, ingest-cli, ingest-server, ingest-proxy, seed) |
+| `--source` | — | string | — | Filter by record source (e.g. burp, caido, scanner, ingest-cli, ingest-server, ingest-proxy, seed) |
 | `--stateless` | `-S` | bool | `false` | Read from --db (a .jsonl export or standalone .sqlite) with project scoping off; never writes to your project DB |
 | `--status` | — | intSlice | — | Filter by HTTP status code (repeatable, e.g. --status 200 --status 404) |
 | `--timeout` | — | duration | `15s` | Per-request timeout for --replay (e.g. 30s, 1m) |

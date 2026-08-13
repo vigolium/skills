@@ -50,6 +50,11 @@ vigolium traffic -B http://127.0.0.1:9009 --host acme.test
 
 - `-B/--burp-bridge-url` defaults to `$VIGOLIUM_BURP_BRIDGE_URL`, **not** to
   `http://127.0.0.1:9009`. With neither set, every bridge feature is simply off.
+- `--caido-bridge-url` is an alias of the same flag, for pointing at a Caido
+  plugin exposing the same loopback bridge. It is one flag with two spellings
+  (a flag-name alias, so it renders no line of its own in `--help`), not two
+  flags — either name sets the same value, and the env var is
+  `$VIGOLIUM_BURP_BRIDGE_URL` under both.
 - The URL is validated: `http://` only, a **loopback host** (`127.0.0.1`, `::1`,
   or `localhost`), an explicit **port**, and **no path**. Anything else is a hard
   error before a request is made.

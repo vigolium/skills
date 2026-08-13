@@ -105,6 +105,12 @@ from an agent.
 | Re-send under a different session | `vigolium replay -u <uuid> -H 'Cookie: session=other'` |
 | Payload / insertion-point fuzzing | `vigolium fuzz -u <uuid> --point URL_PARAM:id --class sqli -a` |
 | Fuzz a wordlist at a `FUZZ` marker | `vigolium fuzz https://t/FUZZ -w file-long --match-status-code 200,301` |
+| Scan files/stdin for leaked secrets | `vigolium kit secret-scan <files\|dirs\|-> --fail-on-match` |
+| Unminify / unpack a JS bundle | `vigolium kit js-beautify <file\|url\|->` |
+| OOB (OAST) callback URL + polling | `vigolium kit oast new` → `vigolium kit oast poll -o run.yaml` |
+| Harvest known URLs for a domain | `vigolium kit harvest target.example` |
+| Crack a JWT's HMAC secret | `vigolium kit jwt-crack <token>` |
+| List/print built-in wordlists or payloads | `vigolium kit wordlist [name]` / `vigolium kit payload --class sqli` |
 | Hand a finding to Burp | `vigolium finding --id 42 --push-to-burp -B http://127.0.0.1:9009` |
 | Pull live Burp Proxy history into the DB | `vigolium import -B http://127.0.0.1:9009` |
 | Send exact bytes through Burp's engine | `vigolium replay --raw-request-file req.txt --send-via-burp --http-mode http1 -B …` |
@@ -140,6 +146,7 @@ Load the file that matches the task — don't read them all.
 | **Driving vigolium from an agent** | `references/agent-loop.md` | triage, `-j` contracts, replay, exports, exit codes |
 | Scanning commands | `references/scanning.md` | scan / scan-url / scan-request / run flags, phases, strategies, output formats |
 | Fuzzing | `references/fuzzing.md` | `vigolium fuzz` — positions, markers, attack modes, payload classes, anomaly scoring, matchers |
+| Utility toolbox | `references/kit.md` | `vigolium kit` — secret-scan, js-beautify, oast, harvest, jwt-crack, wordlist, payload |
 | Burp Suite | `references/burp.md` | bridge setup, live history, Repeater/Organizer/Site map handoff, `--send-via-burp`, proxy channel |
 | AI agent modes | `references/agent-modes.md` | agent query / autopilot / swarm / audit / olium / triage / session, intensities, providers, templates |
 | Auth & sessions | `references/auth.md` | `--auth-file` / `--auth`, YAML format, extract rules, authenticated scanning |
@@ -300,6 +307,22 @@ its local name); `-t` overrides only the endpoint host, keeping the WSDL path.
 | Filesystem tree | `--format fs -o run` | browsable `run-traffic/` + `run-findings/`; see `references/agent-loop.md` |
 
 Combine with commas: `--format jsonl,html -o report.html`.
+
+## Utility toolbox (`vigolium kit`)
+
+Stateless one-shot primitives — no DB, no project scope, no scan pipeline. Each
+reads `-`/stdin and takes `-j/--json`; nothing is persisted, so pipe the output.
+Details and JSON shapes: `references/kit.md`.
+
+| Command | Does |
+|---------|------|
+| `kit secret-scan <files\|dirs\|->` | scan bytes for leaked credentials (embedded catalog); `--fail-on-match` exits 3 |
+| `kit js-beautify <file\|url\|->` | unminify + unpack a JS bundle (webcrack); `--extract` for endpoints |
+| `kit oast new` / `kit oast poll` | mint OOB callback URLs (session file) and drain DNS/HTTP/SMTP hits |
+| `kit harvest <domain…>` | collect known URLs from Wayback/CommonCrawl/OTX/Arquivo (same set as `external-harvest`) |
+| `kit jwt-crack <token>` | recover a JWT's HMAC secret from a wordlist (+ alg-confusion); `--fail-on-crack` exits 3 |
+| `kit wordlist [name]` | list or print the built-in wordlists (also feeds `jwt-crack -w`) |
+| `kit payload --class <c>` | emit built-in payloads by class (same catalog as `fuzz --class`) |
 
 ## Recipes
 
