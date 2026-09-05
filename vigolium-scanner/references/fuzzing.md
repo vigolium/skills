@@ -420,4 +420,6 @@ Exit 3 on a hit; the summary object lands on stdout either way.
   a 5-payload run gets baseline signals only.
 - `--ignore-scope` is required for a host outside the project scope; the guard
   is deliberate.
-- Exit **3** means `--fail-on-match` matched; exit 1 is an error.
+- Exit **3** means `--fail-on-match` matched. Exit **1** is an error and exit
+  **2** is a usage error (bad flag or value) — three distinct outcomes, not one.
+  Full table: [agent-loop.md → Exit codes](agent-loop.md#exit-codes).

@@ -9,7 +9,8 @@ or stdin and store it as HTTP records, either into the local database or into a
 running vigolium server.
 
 `ingest` is the "load traffic, don't scan yet" primitive. To scan on receive,
-add `-S` (local) or feed a server started with `-S` (see [server.md](server.md)).
+add `--scan-on-receive` (local) or feed a server started with it (see
+[server.md](server.md)).
 
 ## Table of Contents
 
@@ -35,6 +36,33 @@ Responses are fetched by default (source `ingest-cli`); disable with
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--server` | `-s` | string | — | Server URL for remote ingestion (omit for local mode) |
+| `--dir` | — | string | — | Ingest every matching file in this directory **in one process** |
+| `--dir-glob` | — | string | `*` | Filename pattern for `--dir`, e.g. `'*.har'` |
+
+### Batch ingest — N files, ONE process
+
+`-i` is repeatable, and `--dir` walks a directory. Both ingest every source in a
+single process against a single database handle:
+
+```bash
+# Repeated -i, in the order given.
+vigolium ingest -i a.har -i b.har -i c.yaml
+
+# Or point at a directory (non-recursive, sorted, so re-runs are reproducible).
+vigolium ingest --dir ./captures --dir-glob '*.har' -I har
+```
+
+A failing source does not discard its siblings — one bad HAR in fifty must not
+cost the other forty-nine. The command still exits non-zero and names how many
+failed.
+
+An empty `--dir` match is a **hard error**: "ingested 0 records" for a typo'd
+path is indistinguishable from an empty capture.
+
+> Concurrent `vigolium ingest` processes against one SQLite file are safe (every
+> open sets `busy_timeout`, WAL, and an immediate write lock, so writers
+> serialize instead of failing with `SQLITE_BUSY`). Batch mode is still the right
+> shape — it pays one process start and one schema check, not N.
 
 ### Key Global Flags for Ingest
 
@@ -44,7 +72,7 @@ Responses are fetched by default (source `ingest-cli`); disable with
 | `-i <file>` | Input file path (`-` for stdin) |
 | `-I <format>` | Input format (`urls`, `openapi`, `swagger`, `wsdl`, `burp`, `curl`, `har`, `postman`, `nuclei`, `burpscope`) |
 | `-T <file>` | Target-file: one target URL per line (for `urls`/`burpscope` only — a spec goes through `-i`) |
-| `-S` | After ingesting, scan the records (local mode only) |
+| `--scan-on-receive` | After ingesting, scan the records (local mode only). `-S` is a **deprecated alias** here and warns — everywhere else `-S` means `--stateless`. |
 | `--spec-url` | Use server URLs from the OpenAPI/Swagger spec |
 | `--spec-header` | HTTP header(s) for OpenAPI/WSDL requests (repeatable) |
 | `--spec-var` | OpenAPI parameter / WSDL element values as `key=value` (repeatable) |
@@ -64,7 +92,7 @@ Responses are fetched by default (source `ingest-cli`); disable with
 
 - **Local mode** (default): ingests directly into the local SQLite database and fetches HTTP responses.
 - **Remote mode** (`--server <url>` / `-s`): sends records to a running vigolium server via `POST /api/ingest`. Set `VIGOLIUM_API_KEY` (or the server's `--alternative-ingest-key`) for auth.
-- `-S` / `--scan-on-receive` is **ignored in remote mode** — the server decides whether to scan (start it with `-S`; see [server.md](server.md)).
+- `--scan-on-receive` is **ignored in remote mode** — the server decides whether to scan (start it with `--scan-on-receive`; see [server.md](server.md)).
 
 ## Input formats — one example each
 
@@ -158,7 +186,10 @@ files.
 
 ```bash
 # Ingest a spec locally, then auto-scan the generated requests.
-vigolium ingest -t https://api.example.com -I openapi -i spec.yaml -S
+vigolium ingest -t https://api.example.com -I openapi -i spec.yaml --scan-on-receive
+
+# Ingest a whole capture folder in one process.
+vigolium ingest --dir ./captures --dir-glob '*.har' -I har
 
 # Ingest a Burp export request-only (no response fetching — fast, offline).
 vigolium ingest -I burp -i export.xml --disable-fetch-response

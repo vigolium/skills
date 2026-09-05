@@ -36,9 +36,10 @@ vigolium-scanner --agent <name> --yes`, or clone
 vigolium-scanner/
 ├── SKILL.md                      # always loaded: router, mental model, invariants
 └── references/                   # loaded on demand, one hop from SKILL.md
-    ├── agent-loop.md             # ★ driving vigolium from an agent: -j contracts,
-    │                             #   triage, replay, exports, exit codes
-    ├── scanning.md               # scan, scan-url, scan-request, run, phases, strategies
+    ├── agent-loop.md             # ★ driving vigolium from an agent: the -j envelope,
+    │                             #   --events stream, triage, replay, exports, exit codes
+    ├── scanning.md               # scan, scan-url, scan-request, run, phases, strategies,
+    │                             #   pace + per-phase dials, tool shims (ffuf/nuclei/…)
     ├── fuzzing.md                # vigolium fuzz: positions, attack modes, anomaly scoring
     ├── burp.md                   # Burp bridge, Repeater/Organizer/Site map, --send-via-burp
     ├── agent-modes.md            # agent query/autopilot/swarm/audit/olium/triage/session
@@ -53,7 +54,8 @@ vigolium-scanner/
 `SKILL.md` is the only file always in context; it routes to at most one reference
 per task. If you are building an agent integration, start with
 `references/agent-loop.md` — it documents the `scope → scan → read → confirm →
-hand off` loop, the two JSON contracts, and the token-bounding flags.
+hand off` loop, the three machine contracts (`-j` envelope, bulk `jsonl`, live
+`--events` stream), the exit-code table, and the token-bounding flags.
 
 ## Maintaining
 

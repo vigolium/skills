@@ -30,7 +30,7 @@ To *push* traffic into a running server (or ingest locally without a server), se
 
 Start the API server. By default it exposes the Swagger UI, the `/api/ingest`
 endpoint, and the agent endpoints, all behind API-key auth. It does **not** scan
-anything until you either call an endpoint or pass `-S`/`--scan-on-receive`.
+anything until you either call an endpoint or pass `--scan-on-receive`.
 
 ### server-specific flags
 
@@ -51,7 +51,7 @@ anything until you either call an endpoint or pass `-S`/`--scan-on-receive`.
 | `--no-auth` | `-A` | bool | `false` | Run server without API key authentication |
 | `--no-swagger` | — | bool | `false` | Disable the Swagger UI and API spec endpoint |
 | `--output` | `-o` | string | — | Write findings to specified output file |
-| `--passive-only` | — | bool | `false` | With `-S`/`--scan-on-receive`, run passive modules only (no active scan traffic; includes secret detection) |
+| `--passive-only` | — | bool | `false` | With `--scan-on-receive`, run passive modules only (no active scan traffic; includes secret detection) |
 | `--proxy-insecure` | — | bool | `false` | When intercepting HTTPS (`--proxy-mitm`), skip verification of the upstream server's TLS certificate |
 | `--proxy-mitm` | — | bool | `false` | Intercept HTTPS through `--ingest-proxy-port` using a generated CA so TLS traffic is recorded (trust the CA printed at startup) |
 | `--service-port` | — | int | `9002` | Port for the REST API server |
@@ -83,16 +83,16 @@ vigolium server \
 
 | Flag | Description |
 |------|-------------|
-| `-t <url>` | Target URL (used with `-S` for scope) |
-| `-S` / `--scan-on-receive` | Auto-scan every ingested request |
+| `-t <url>` | Target URL (used with `--scan-on-receive` for scope) |
+| `--scan-on-receive` | Auto-scan every ingested request (`-S` is a deprecated alias here and warns) |
 | `--full-native-scan-on-receive` | Run the full native pipeline (discovery + spidering + dynamic-assessment) on received records, not dynamic-assessment only |
 | `-c` / `--concurrency` | Worker pool size |
 | `--proxy` | Proxy for outgoing requests |
 
-`-S`/`--scan-on-receive` is the **same letter** as `--stateless` elsewhere but a
-different flag — on `server`/`ingest` it means *scan-on-receive*. Pair it with
-`-t <url>` so the auto-scan has a scope; without a scope it scans every host it
-receives.
+**Write `--scan-on-receive`, not `-S`.** `-S` means `--stateless` on every other
+command; here it is a *deprecated alias* for scan-on-receive that still works but
+warns, and it will be removed. Pair the flag with `-t <url>` so the auto-scan has
+a scope; without a scope it scans every host it receives.
 
 ---
 
@@ -111,7 +111,7 @@ curl -x http://127.0.0.1:8080 http://target.example/
 vigolium scan --only dynamic-assessment -t http://target.example
 ```
 
-For an all-in-one capture-and-scan, add `-S -t <url>` so each request is scanned
+For an all-in-one capture-and-scan, add `--scan-on-receive -t <url>` so each request is scanned
 as it arrives.
 
 ## HTTPS interception
@@ -160,8 +160,8 @@ Burp/proxy traffic as files in real time (`ls`/`grep`/`jq`).
 | `GET` | `/` | Swagger UI dashboard |
 
 All data endpoints are project-scoped via the `X-Project-UUID` header (mirrors
-the CLI `--project` flag). Ingestion endpoints additionally accept any
-`--alternative-ingest-key`.
+the CLI `--project-uuid` / `--project-name` flags). Ingestion endpoints
+additionally accept any `--alternative-ingest-key`.
 
 ## Examples
 
@@ -176,10 +176,10 @@ vigolium server --service-port 8443 --no-auth
 vigolium server -t https://example.com --scan-on-receive
 
 # Passive-only scan-on-receive (no active traffic; secret detection still runs).
-vigolium server -t https://example.com -S --passive-only
+vigolium server -t https://example.com --scan-on-receive --passive-only
 
 # Full native pipeline (discovery + spidering + assessment) on each record.
-vigolium server -t https://example.com -S --full-native-scan-on-receive
+vigolium server -t https://example.com --scan-on-receive --full-native-scan-on-receive
 
 # Transparent recording proxy.
 vigolium server --ingest-proxy-port 8080

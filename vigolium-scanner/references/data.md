@@ -129,15 +129,31 @@ vigolium import ./src/vigolium-results --format html -o audit-report.html
 | `--format` | — | string | — | Also write a report after import: `html`, `report`, `pdf`, or `markdown` (`md`). Same generators as `vigolium export --format`, but one value only (no comma list) |
 | `--output` | `-o` | string | — | Report output path or `gs://<project>/<key>` URL (required when `--format` is set; supports `{ts}`) |
 | `--glob-db` | — | string | — | Glob of local files to import alongside any positional paths (one format per run) |
-| `--burp-bridge-url` | `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Import live Burp Proxy history from this loopback bridge URL |
+| `--burp-bridge-url` | `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Import live Burp/Caido Proxy history from this loopback bridge URL. **Requires a filter or `--all-hosts`** — see below |
+| `--host` / `--path` / `--method` / `--status` / `--search` / `--exclude-search` / `--from` / `--to` / `-n` | — | — | — | With `-B`: narrow which live records are imported (same spellings as `traffic -B`) |
+| `--all-hosts` | — | bool | `false` | With `-B`: import the **entire** proxy history, unfiltered. Required when no filter is given |
+| `--yes` | — | bool | `false` | With `-B`: skip the pre-flight confirmation |
 | `--upload` / `--upload-key` | — | bool / string | — | Upload the import source to cloud storage after import (optional explicit key) |
 | `--severity` / `--search` | — | string | — | Filter the emitted report's findings |
 | `--report-title` / `--report-target` / `--report-duration` / `--report-generated-at` / `--report-url` | — | string | — | HTML report metadata |
 
+**`import -B` refuses an unfiltered pull.** Without a narrowing filter it errors
+(exit 2) instead of copying every host the operator has ever browsed — with those
+hosts' cookies and tokens — into your database. Pass `--host`/`--path`/etc., or
+`--all-hosts` to opt in deliberately. A pre-flight prints how many records are
+about to cross **before** anything is written; `--yes` (or a non-TTY) skips the
+confirmation, but never the refusal.
+
+```bash
+vigolium import -B http://127.0.0.1:9009 --host acme.test    # correct
+vigolium import -B http://127.0.0.1:9009                     # refused, exit 2
+vigolium import -B http://127.0.0.1:9009 --all-hosts --yes   # deliberate
+```
+
 Notes:
 - Imported findings inherit the current project's UUID and default `finding_source = "import"` when the field is empty.
 - Unknown envelope types are counted and reported at the end (e.g. for forward-compatibility).
-- Use `--project-uuid` / `--project-name` (or `VIGOLIUM_PROJECT`) to target a specific project.
+- Use `--project-uuid` / `--project-name` (or `VIGOLIUM_PROJECT_UUID` / `VIGOLIUM_PROJECT_NAME`) to target a specific project.
 
 ---
 
@@ -161,10 +177,43 @@ The legacy `run.log` filename is also resolved for older sessions. Agent audit c
 |------|-------|------|---------|-------------|
 | `--tail` | `-n` | int | `200` | Show the last N lines (0 = none, -1 = all) |
 | `--full` | — | bool | `false` | Show the full log (shortcut for `--tail -1`) |
-| `--follow` | `-f` | bool | `false` | Follow log output as it is written (tail -f). Auto-enabled when the session is still running, unless `--follow=false` is set explicitly |
+| `--follow` | `-f` | bool | `false` | Follow log output as it is written (tail -f). Auto-enabled only when the session is still running **and** stdout is a TTY **and** the row is not stale — see below |
+| `--stateless` | `-S` | bool | `false` | Read the session list/log from `--db` (a standalone `.sqlite`) with project scoping off |
 | `--strip-ansi` | — | bool | `false` | Strip ANSI color codes from output |
 | `--raw` | — | bool | `false` | For agentic sessions, print the raw transcript JSONL verbatim instead of the rendered replay |
 | `--tui` / `--no-tui` | — | bool | — | Enable / force-disable interactive picker (affects `log ls` behaviour) |
+
+### `--follow` will not hang on a dead scan
+
+Auto-follow used to fire whenever the scan row said `running` — and a scan reaped
+by a deadline or SIGKILL leaves it saying that **forever**, so an omitted
+`--follow` parked the read until the caller's own timeout, on precisely the runs
+that had already timed out. Three gates now apply:
+
+- a **non-TTY stdout** (a pipe — i.e. a program, which wants the log and an exit)
+  never auto-follows,
+- a row whose log has not been written to for ~2 minutes is treated as stale,
+- an explicitly typed `--follow` / `--follow=false` still wins either way.
+
+So `vigolium log <uuid> | cat` terminates promptly. For live progress from a
+program, prefer `--events ndjson` on the scan itself (see
+[agent-loop.md](agent-loop.md)) — it is a structured stream rather than a
+rendered log.
+
+### `--full` is not needed to see WAF notices
+
+WAF notices fire **early** (the edge is fingerprinted on the first clean
+response), so the default 200-line tail is structurally the wrong end of the log
+for the most important thing in it. Any `[waf-block-detected]` /
+`[waf-pacing-armed]` line above the tail window is reprinted above it under a
+"N earlier notice(s)" header.
+
+### `log` respects `$VIGOLIUM_DB_PATH`
+
+`log` reads through the same path `finding`/`traffic` do, so a shell pinned with
+`$VIGOLIUM_DB_PATH` (or `-S --db <file>`) reaches that session's database with
+project scoping off. It used to reject `-S` outright with "unknown shorthand
+flag" — a non-zero exit and no output.
 
 ### log ls
 
@@ -279,7 +328,7 @@ List database records with filtering, sorting, and display options. The target t
 
 ### Agent JSON output flags
 
-With `-j`/`--json`, `db ls` emits the same compact, token-aware object as `finding`/`traffic` and accepts the shared shaping flags: `--compact` (metadata only), `--fields a,b,c` (project top-level keys), `--full-body` (complete bodies). `--with-records` is finding-only; `db stats -j` is the exception that emits its raw stats struct. See SKILL.md recipe 14c.
+With `-j`/`--json`, `db ls` emits the same compact, token-aware object as `finding`/`traffic` and accepts the shared shaping flags: `--compact` (metadata only), `--fields a,b,c` (project top-level keys), `--full-body` (complete bodies). `--with-records` is finding-only. Every `-j` command (including `db stats`) uses the **same envelope** — `{schema_version, command, project_uuid, db_path, total, offset, limit, items, query}`, with `items` canonical and the old row key (`records`/`findings`/`scans`/`rows`) kept as a deprecated alias. See [agent-loop.md → The `-j` envelope](agent-loop.md#the--j-envelope).
 
 ### Examples
 
@@ -302,6 +351,8 @@ vigolium db ls --raw --limit 5
 **Usage:** `vigolium db stats [flags]`
 
 Show database statistics including record counts, finding breakdowns, and host summaries.
+
+Under `-j/--json` it emits the **standard envelope** like every other read command (stats under `items`, aliased as `stats`). It used to be a documented exception that dumped its raw struct — a contract with a hole in it is one consumers special-case forever.
 
 ### stats-specific flags
 
@@ -465,12 +516,14 @@ Also accepts: `--host`, `--method`, `--status`, `--path`, `--from`, `--to`, `--s
 
 ### Finding → Burp push flags (triage handoff)
 
-Hand each selected finding's evidence request (and response, where available) to Burp for manual confirmation — the Organizer by default, or a Repeater tab under `--to-repeater`. This is an action, not a display: it returns before any table/JSON render and never runs the scanner. Only `finding` has these (traffic/`db ls` do not).
+Hand each selected finding's evidence request (and response, where available) to Burp for manual confirmation. This is an action, not a display: it returns before any table/JSON render and never runs the scanner. Only `finding` has these (traffic/`db ls` do not).
+
+`--push-to-burp` (Organizer) and `--to-repeater` are **independent destinations that compose**, exactly as they do on `vigolium replay` — one invocation can file a finding *and* open it. `--to-repeater` alone still means Repeater only. (They used to be mutually exclusive here and composable on `replay`: the same operation with two different rules.)
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--push-to-burp` | — | bool | `false` | Push the selected finding(s)' evidence request+response to Burp's Organizer for manual confirmation; requires `--burp-bridge-url` |
-| `--to-repeater` | — | bool | `false` | Push to a Burp Repeater tab instead of the Organizer (respects Burp's 30-tabs/min cap; warns above 20 findings) |
+| `--to-repeater` | — | bool | `false` | Also stage the finding(s) in a Burp Repeater tab (respects Burp's 30-tabs/min cap; warns above 20 findings). Composes with `--push-to-burp` |
 | `--send-via-burp` | — | bool | `false` | With `--push-to-burp`/`--to-repeater`: re-issue the request through Burp's engine and store the fresh response |
 | `--burp-bridge-url` | `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Loopback Burp bridge URL used by `--push-to-burp` / `--to-repeater` |
 | `--http-mode` | — | string | — | With `--send-via-burp`: wire protocol — `auto`\|`http1`\|`http2`\|`http2_ignore_alpn` (default `auto`) |
@@ -487,7 +540,7 @@ With `-j`/`--json`, `finding` emits **one compact, token-aware object** (bodies 
 | `--full-body` | — | bool | `false` | Complete bodies — no preview caps, no binary/static stubbing |
 | `--with-records` | — | bool | `false` | Embed each finding's linked HTTP records as a `records:[…]` triage bundle |
 
-`--compact`, `--fields`, and `--full-body` are shared with `traffic` and `db ls`; `--with-records`, `--min-severity`, and `--agentic-scan` are finding-only. See SKILL.md recipe 14c.
+`--compact`, `--fields`, and `--full-body` are shared with `traffic` and `db ls`; `--with-records`, `--min-severity`, and `--agentic-scan` are finding-only. See [agent-loop.md → Token discipline](agent-loop.md#token-discipline).
 
 ### Available columns
 
@@ -634,7 +687,7 @@ Burp-bridge **listing** sync flags stay here because they operate on the
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--burp-bridge-url` / `-B` | string | `$VIGOLIUM_BURP_BRIDGE_URL` | Merge live traffic from this loopback Burp bridge URL with local DB records |
-| `--save-to-vigolium-db` | bool | `false` | Persist the live Burp records selected by the active filters into the database (requires `--burp-bridge-url`; not with `--replay`) |
+| `--save-to-vigolium-db` | bool | `false` | Persist the live Burp records selected by the active filters into the database (requires `--burp-bridge-url`; not with `--replay`). The **write** is not bounded by `-n`'s listing default — an untyped `-n` no longer silently truncates the import at 100 records; a typed `-n` is honored and warns when it bit |
 | `--save-to-burp` | bool | `false` | Copy the DB records selected by the active filters into Burp's Target site map (requires `--burp-bridge-url`; not with `--replay`) |
 
 The two `--save-to-*` flags are mutually exclusive with `--replay`.
@@ -1035,7 +1088,7 @@ vigolium project delete <project-uuid>             # aliases: rm, remove
 
 **Usage:** `vigolium storage <subcommand>`
 
-Manage cloud-storage objects scoped to the **active project** (selected via `--project-uuid`, `--project-name`, or `VIGOLIUM_PROJECT`). Mirrors the REST endpoints under `/api/storage/*`.
+Manage cloud-storage objects scoped to the **active project** (selected via `--project-uuid`, `--project-name`, `VIGOLIUM_PROJECT_UUID`, or `VIGOLIUM_PROJECT_NAME`). Mirrors the REST endpoints under `/api/storage/*`.
 
 **Requires** `storage.enabled: true` in `vigolium-configs.yaml` (or `VIGOLIUM_STORAGE_ENABLED=true`) plus `storage.driver`, `storage.bucket`, `storage.access_key`, and `storage.secret_key`. When storage is disabled, every subcommand prints a tip showing how to enable it and exits cleanly (no error).
 

@@ -4,6 +4,28 @@
 
 Complete flag reference for `scan`, `scan-url`, `scan-request`, and `run` commands.
 
+## Choosing a scan command
+
+- **`scan -t <url>`** — broad. Give it a bare host or root URL and it expands the
+  surface itself (discovery, spidering, the full phase pipeline per `--strategy`).
+- **`scan-url` / `scan-request`** — precision. Use these only when you're testing
+  **one specific request**: it already has full query params, a deep multi-segment
+  path, or custom headers/method/body that must be sent verbatim. They scan that
+  single request (phases are opt-in via `--discover`/`--spider`).
+
+A full `scan` can exceed 30 min per target — discovery defaults to
+`--discover-max-time 1h`, spidering to `--spider-max-time 30m`, and
+`--scanning-max-duration` defaults to `0s` (**no total cap**). **Run a full scan
+in the background**, or bound it explicitly:
+
+```bash
+vigolium scan -t https://target.example --scanning-max-duration 30m
+```
+
+To iterate on one part of the pipeline instead of the whole thing, run a phase
+directly with `vigolium run <phase>` (see [run](#run)) — e.g. `run spidering` or
+`run discovery`.
+
 ## Table of Contents
 
 - [scan](#scan)
@@ -11,6 +33,7 @@ Complete flag reference for `scan`, `scan-url`, `scan-request`, and `run` comman
 - [scan-request](#scan-request)
 - [run](#run)
 - [Strategy and Phase Interaction](#strategy-and-phase-interaction)
+- [Replacing standalone recon tools](#replacing-standalone-recon-tools)
 
 ---
 
@@ -84,7 +107,7 @@ Stateless mode is great for ephemeral CI/CD runs — it creates a temp SQLite fi
 |------|------|---------|-------------|
 | `--discover` | bool | `false` | Enable content discovery phase before scanning |
 | `--discover-max-time` | duration | `1h` | Max time for content discovery per target |
-| `--fuzz-wordlist` | string | — | Custom fuzz wordlist path (enables fuzzing during discovery) |
+| `--discovery-wordlist` | string | — | Custom wordlist seeding the discovery phase (enables fuzzing on the fly). Formerly `--fuzz-wordlist`, still accepted as a deprecated alias. **Not** the same knob as `vigolium fuzz -w`. |
 | `--no-prefix-breaker` | bool | `false` | Disable per-prefix circuit breaker that stops trap-directory recursion |
 | `--port-sweep-ports` | string | — | Override the alternate HTTP(S) ports swept on CLI target hosts (comma-separated; the sweep runs at `--intensity deep` or with `--follow-subdomains`) |
 
@@ -165,8 +188,14 @@ vigolium scan -t https://example.com --fail-on high
 # With proxy
 vigolium scan -t https://example.com --proxy http://127.0.0.1:8080
 
-# Speed tuning
+# Speed tuning (bare form applies to the whole invocation)
 vigolium scan -t https://example.com -c 100 --rate-limit 200
+
+# Per-phase speed: cap the nuclei phase only
+vigolium scan -t https://example.com --rate-limit known-issue-scan=20
+
+# Watch it run from a program (human console stays on stderr)
+vigolium scan -t https://example.com --events ndjson 2>/dev/null | jq -c .
 
 # Source-aware / whitebox scanning is an agent feature (see agent-modes.md)
 vigolium agent autopilot -t https://example.com --source ./src
@@ -204,6 +233,8 @@ vigolium scan -t https://example.com --only extension --ext custom-check.js
 **Usage:** `vigolium scan-url <url> [flags]`
 
 Scan a single URL for vulnerabilities. Designed for quick, targeted scans and AI agent integration. Returns JSON output with findings.
+
+> Precision command — for one specific request; for broad surface expansion use `scan -t` (see [Choosing a scan command](#choosing-a-scan-command)).
 
 ### scan-url specific flags
 
@@ -266,6 +297,8 @@ vigolium scan-url https://example.com/api -m xss-reflected --no-passive
 
 Read a raw HTTP request from file or stdin and run scanner modules against it. Designed for pipeline integration and AI agent workflows.
 
+> Precision command — for one specific request; for broad surface expansion use `scan -t` (see [Choosing a scan command](#choosing-a-scan-command)).
+
 ### scan-request specific flags
 
 **Spidering:**
@@ -323,15 +356,17 @@ Run a single scan phase directly. Equivalent to `vigolium scan --only <phase>`.
 
 ### Valid phases
 
-| Phase | Aliases |
-|-------|---------|
-| `ingestion` | — |
-| `discovery` | `deparos`, `discover` |
-| `external-harvest` | — |
-| `known-issue-scan` | `cve`, `kis`, `known-issues` |
-| `spidering` | `spitolas` |
-| `dynamic-assessment` | `audit`, `dast`, `assessment` |
-| `extension` | `ext` |
+| Phase | Aliases | Description |
+|-------|---------|-------------|
+| `ingestion` | — | Parse and store input into the database |
+| `discovery` | `deparos`, `discover` | Adaptive content discovery |
+| `external-harvest` | — | Wayback / Common Crawl / OTX URL aggregation |
+| `spidering` | `spitolas` | Headless-browser crawling for JS-driven routes |
+| `known-issue-scan` | `cve`, `kis`, `known-issues` | Nuclei templates + Kingfisher secrets |
+| `dynamic-assessment` | `dast`, `assessment` | Core active + passive vulnerability scanning |
+| `extension` | `ext` | JavaScript extension modules only |
+
+`audit` is also an alias for `dynamic-assessment` on `--only` / `--skip`, but **not** as a `vigolium run` argument: `vigolium run audit` is rejected because it reads as the AI source-code audit (`vigolium agent audit`). Use `vigolium run dast` for the native module scan.
 
 The `run` command accepts the same flag groups as `scan` (Spidering, Discovery, Harvest, KnownIssueScan, Input Format, Request, Output, and `--oast-url`), **except** the module-selection flags `--module-id` / `--passive-only`, which are only on `scan` / `scan-url` / `scan-request`.
 
@@ -340,20 +375,35 @@ The `run` command accepts the same flag groups as `scan` (Spidering, Discovery, 
 ```bash
 vigolium run discover -t https://example.com
 vigolium run spidering -t https://example.com
-vigolium run audit -t https://example.com
-vigolium run audit -t https://example.com --module-tag spring
+vigolium run dast -t https://example.com
+vigolium run dast -t https://example.com --module-tag spring
 vigolium run external-harvest -t https://example.com
 vigolium run known-issue-scan -t https://example.com
 vigolium run known-issue-scan -t https://example.com --known-issue-scan-tags cve --known-issue-scan-severities critical,high
 vigolium run extension -t https://example.com --ext custom-check.js
 vigolium run ext -t https://example.com --ext ./my-scanner.js
 vigolium run deparos -t https://example.com
-vigolium run audit -t https://example.com
+vigolium run dynamic-assessment -t https://example.com
 ```
 
 ---
 
 ## Strategy and Phase Interaction
+
+### Strategy matrix
+
+Strategies control which phases run. Select with `--strategy <name>`; print the
+table with `vigolium strategy` (no `ls` subcommand). Default lives in
+`scanning_strategy.default_strategy`.
+
+| Strategy | ExtHarvest | Discovery | Spidering | KnownIssueScan | Assessment |
+|----------|:---------:|:---------:|:---------:|:--------------:|:----------:|
+| `lite` | no | no | no | no | yes |
+| `balanced` *(default)* | no | yes | yes | yes | yes |
+| `deep` | yes | yes | yes | yes | yes |
+
+Source-aware / whitebox scanning is **not** a strategy — it is an agent feature
+(`agent audit`/`autopilot`/`swarm` `--source`; see the SAST note below).
 
 ### Precedence
 
@@ -382,10 +432,58 @@ vigolium run audit -t https://example.com
 
 Speed settings have a layered precedence:
 
-1. CLI flags (`-c`, `--rate-limit`, `--max-per-host`) — highest
-2. `--scanning-max-duration` — overrides `scanning_pace.max_duration`
-3. Config `scanning_pace` section — per-phase max_duration and duration_factor
-4. Built-in defaults — lowest
+1. A **phase-qualified** CLI flag (`--rate-limit known-issue-scan=20`) — highest
+2. A bare CLI flag (`-c`, `--rate-limit`, `--max-per-host`)
+3. `--scanning-max-duration` — overrides `scanning_pace.max_duration`
+4. Config `scanning_pace` section — per-phase max_duration and duration_factor
+5. The strategy's own pace ceiling (`lite` only — see below)
+6. Built-in defaults — lowest
+
+**The pace flags apply whether or not you type them.** `--rate-limit` used to be
+enforced only when passed, so silence meant *unlimited* while the help text
+advertised 100. It now applies at its documented default; pass `--rate-limit 0`
+for genuinely no cap. A negative value is a usage error (exit 2), not
+"unlimited".
+
+**Each of the three dials takes an optional phase qualifier, repeatable and
+mixable with the bare form:**
+
+```bash
+# Cap nuclei without capping the ~200 native modules, which pace themselves.
+vigolium scan -t https://target.example \
+  --only known-issue-scan,dynamic-assessment \
+  --rate-limit known-issue-scan=20
+
+# Bare form, unchanged.
+vigolium scan -t https://target.example --rate-limit 50
+
+# Mixed: 50 rps everywhere, 20 for the nuclei phase.
+vigolium scan -t https://target.example --rate-limit 50 --rate-limit kis=20
+```
+
+Qualifiers accept the same phase aliases as `--only`/`--skip` (`kis`, `cve`,
+`deparos`, `dast`, …). A qualifier naming a phase this run does not execute
+warns rather than failing. Resolution per phase is phase-scoped → global →
+strategy/config default, and `scan.started` (under `--events`) reports the
+resolved `pace` plus a `phase_pace` table for any phase that differs — assert
+what applied instead of inferring it from the flags you passed.
+
+**`--strategy lite` carries a pace ceiling** (concurrency 10 / rate 20 /
+max-per-host 10) on top of selecting fewer phases. Previously `lite` and
+`balanced` opened a crawl identically, so a name every operator reads as
+"gentler on the target" was gentler in module count alone. The ceiling only ever
+*narrows*: an explicit `--concurrency` overrules it, and a config already gentler
+than `lite` is not dragged up to it. `balanced` is the baseline and `deep` ships
+no ceiling.
+
+**`known-issue-scan` opens conservatively when unattended.** It runs nuclei,
+which owns its own HTTP stack and does not pace itself, so its no-flags defaults
+are 20 rps / 10 host-concurrency. Before its phase starts, vigolium probes each
+target host through the shared requester: a host whose edge is already filtering
+is **dropped from the target list** (and reported as a `waf.block` event) rather
+than scanned, and the per-host limiter's verdict narrows nuclei's own knobs. A
+sentinel re-probes during the run and curtails the phase if a majority of hosts
+start filtering.
 
 ### CI Output
 
@@ -410,6 +508,49 @@ The following phases can be used with `--only` and `--skip`:
 - `--format fs` writes two sibling dirs off the `-o` base (`<base>-traffic/` + `<base>-findings/`); with no `-o` it defaults to `vigolium-traffic/` + `vigolium-findings/` in the cwd. Available on `scan` / `scan-url` / `scan-request` / `run`, `export`, and `db export`. `--split-by-host` is a no-op (fs already splits per host). For `scan-url` / `scan-request`, pass `-o`, `-S`, or a phase flag so the request routes through the runner that writes the tree
 - `--format sqlite` requires `-S/--stateless` **and** `-o/--output`; aliases `sqlite3` / `db`. Under `--split-by-host` each file is `<base>-<host>.sqlite`. Reopen with `vigolium finding/traffic -S --db <file>.sqlite`
 
+---
+
+## Input formats
+
+`-I <format>` selects the input type; OpenAPI and WSDL auto-detect from content.
+
+| Format | Flag | Example |
+|--------|------|---------|
+| URLs *(default)* | `-I urls` | `-t https://target.example` or `-T targets.txt` |
+| OpenAPI 3.x | `-I openapi` | `-I openapi -i spec.yaml -t https://api.target.example` |
+| Swagger 2.0 | `-I swagger` | `-I swagger -i swagger.json` |
+| WSDL / SOAP | `-I wsdl` | `-I wsdl -i service.wsdl -t https://soap.target.example` — one SOAP POST per operation; a `.svc`/`.asmx` URL auto-fetches its WSDL |
+| Burp XML | `-I burp` | `-I burp -i burp-export.xml` |
+| cURL commands | `-I curl` | `-I curl -i requests.txt` |
+| Nuclei templates | `-I nuclei` | `-I nuclei -i templates/` |
+| HAR archive | `-I har` | `-I har -i traffic.har` |
+| Postman collection | `-I postman` | `-I postman -i collection.json` |
+| Burp scope export | `-I burpscope` | `-I burpscope -i burp-scope.json` — expands a program's scope into seed URLs (content-sniffed on `-T` too) |
+| stdin | — | `cat urls.txt \| vigolium scan -i -` |
+
+**`-i` vs `-T`:** `-i` reads a *spec / export* and expands it into requests; `-T`
+reads a *list of target URLs*, one per line. Pointing `-T` at a YAML spec makes
+every line of that file a target. The only genuine target-list formats are
+`urls` and `burpscope`.
+
+OpenAPI extras: `--spec-url` (use servers from the spec), `--spec-header`
+(auth), `--spec-var` (parameter values), `--spec-default` (fallback). WSDL
+reuses `--spec-header` (auth) and `--spec-var` (override a body element by its
+local name); `-t` overrides only the endpoint host, keeping the WSDL path.
+
+## Output formats
+
+| Format | Flag | Notes |
+|--------|------|-------|
+| Console *(default)* | `--format console` | human-readable tables to stderr |
+| JSONL | `--format jsonl` | bulk `{"type":…,"data":{…}}` stream |
+| HTML | `--format html -o report.html` | interactive ag-grid report; requires `-o` |
+| SARIF | `--format sarif -o out.sarif` | SARIF 2.1.0 for GitHub code scanning / DefectDojo |
+| SQLite | `--format sqlite -S -o run.sqlite` | standalone per-run DB via `VACUUM INTO`; requires `-S` + `-o`; aliases `sqlite3`, `db` |
+| Filesystem tree | `--format fs -o run` | browsable `run-traffic/` + `run-findings/`; see [agent-loop.md](agent-loop.md) |
+
+Combine with commas: `--format jsonl,html -o report.html`.
+
 ### Exit-Code Gating
 
 - `--fail-on <sev>` (`scan` / `run` / `scan-url` / `scan-request`) makes the command exit non-zero when a finding at/above `<sev>` was produced. Accepted (ascending): `info`, `suspect`, `low`, `medium`, `high`, `critical`
@@ -423,3 +564,133 @@ Static analysis and source-aware scanning are **agent** features, not native `sc
 phases. Use `vigolium agent audit --source <path-or-git-url>` (security code audit) or
 `vigolium agent query --source <path> -t code-review`. `--source` accepts a local
 directory, a git URL (cloned automatically), a `.zip`/`.tar.gz`, or a `gs://` archive.
+
+---
+
+## Replacing standalone recon tools
+
+A coding agent will instinctively reach for `nuclei`, `ffuf`, `katana`, `httpx`,
+`gau`. Each maps to a vigolium phase (`run <phase>`) or a `kit` primitive - and
+the win is that instead of piping four uninstalled binaries together, one binary
+runs the phases into one DB you query with `-j/--json`.
+
+**Do not go hunting the host for those binaries.** You will often *find* them,
+and then the run's whole mapping happens outside the pinned traffic DB, outside
+the phase model, with flags nobody scoped - invisible to every later `finding`,
+`traffic` and `replay` call.
+
+### Tool shims: type the argv you already know
+
+You do not have to remember the native spelling. Vigolium accepts each tool's
+own command line and routes it:
+
+```bash
+$ vigolium ffuf -u https://target.example/FUZZ -w words.txt
+◆ routed to: vigolium run discovery -t https://target.example --discovery-wordlist words.txt
+```
+
+| Shim | Routes to |
+|---|---|
+| `vigolium ffuf -u <url>/FUZZ -w <list>` | `run discovery --discovery-wordlist` |
+| `vigolium nuclei -u <url> -severity high -tags cve` | `run known-issue-scan --known-issue-scan-*` |
+| `vigolium katana -u <url>` | `run spidering` |
+| `vigolium gau <domain>` | `run external-harvest` |
+| `vigolium arjun -u <url>` | `fuzz --fuzz param-name --anomaly` |
+
+Mapped flags include the pace knobs (`-t`/`-threads`/`-c` -> `--concurrency`,
+`-rate`/`-rl` -> `--rate-limit`), headers, proxy, and each tool's own selectors.
+Both `-u X` and `-u=X` parse.
+
+Two behaviours to expect:
+
+- **An unmapped argument is a hard error naming the native command**, never a
+  silent drop - a dropped flag is a scan that ran with a scope nobody chose.
+  `vigolium ffuf --mc 200` tells you to run `vigolium run discovery --help`.
+- **Where a concept does not exist, the shim says so rather than approximating.**
+  `katana -d 3` errors: vigolium's spider is a state machine over DOM snapshots,
+  not a depth-limited link follower, so bound it with `--spider-max-time`
+  instead.
+
+The shims are a redirect for muscle memory, not a full port. Once you know the
+native form, prefer it - it takes every vigolium flag, the shims only a subset.
+
+### The pattern
+
+```bash
+# One phase, throwaway DB, portable output - the direct tool substitute.
+vigolium run <phase> -t https://target.example -S --format jsonl,fs -o out
+
+# Or the full pipeline, which chains them (harvest -> discover -> spider ->
+# known-issue-scan -> dynamic-assessment) per --strategy.
+vigolium scan -t https://target.example --strategy deep
+```
+
+### nuclei -> known-issue-scan
+
+`run known-issue-scan` *is* the nuclei engine plus native CVE modules and
+Kingfisher secret scanning. Templates filter the same way:
+
+```bash
+vigolium run known-issue-scan -t https://target.example \
+  --known-issue-scan-tags cve,exposure \
+  --known-issue-scan-severities critical,high \
+  --known-issue-scan-templates-dir ./my-templates
+```
+
+`-I nuclei -i templates/` instead *ingests* a template's request definitions as
+scan traffic (it does not run the templates as nuclei would).
+
+### ffuf / feroxbuster -> fuzz (or discovery)
+
+`vigolium fuzz` is the deliberate ffuf-style primitive - see [fuzzing.md](fuzzing.md).
+
+```bash
+vigolium fuzz https://target.example/FUZZ -w file-long --match-status-code 200,301
+```
+
+For dir/content discovery folded into a scan, use the discovery phase with a
+wordlist: `vigolium run discovery --discovery-wordlist words.txt -t <url>`.
+
+Or just type ffuf's own argv — `vigolium ffuf -u https://t/FUZZ -w words.txt`
+translates to exactly that and prints what it ran (see "Tool shims" below).
+
+### katana / gospider / hakrawler -> spidering
+
+`run spidering` is a headless-browser, JS-aware crawl (state machine, not a
+link-follower), so it reaches SPA routes a static crawler misses:
+
+```bash
+vigolium run spidering -t https://target.example -S --format fs -o crawl
+```
+
+### gau / waybackurls -> kit harvest (or external-harvest)
+
+```bash
+vigolium kit harvest target.example                      # stateless, prints URLs
+vigolium run external-harvest -t https://target.example   # into the scan DB
+```
+
+Sources: Wayback, Common Crawl, AlienVault OTX, Arquivo by default; urlscan and
+VirusTotal join when their keys are set under `external_harvester`.
+
+### httpx (probe) -> passive scan + traffic query
+
+There is **no single prober command**. Get status/title/tech/liveness by running
+a passive-only scan over a host list, then reading the records back:
+
+```bash
+vigolium scan -T hosts.txt --passive-only -S --format sqlite -o probe
+vigolium traffic -S --db probe.sqlite -j --compact \
+  --fields url,status_code,response_title,response_content_type,technology
+```
+
+`-S` on the scan discards the temp DB after export, so the follow-up `traffic`
+must read the exported file (`-S --db`), not the project DB. Passive modules
+fingerprint the tech stack; the traffic rows carry `status_code`,
+`response_title`, `response_content_type`, and `technology` (omitted when empty).
+
+### subfinder / amass -> not covered
+
+Vigolium does **not** do external passive subdomain enumeration. Bring your own
+subdomain list via `-T`. `--follow-subdomains` only pulls in-scope hosts already
+observed in responses (auto-on at `--intensity deep`); it is not a substitute.

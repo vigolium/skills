@@ -55,6 +55,12 @@ vigolium traffic -B http://127.0.0.1:9009 --host acme.test
   (a flag-name alias, so it renders no line of its own in `--help`), not two
   flags — either name sets the same value, and the env var is
   `$VIGOLIUM_BURP_BRIDGE_URL` under both.
+- **Everything in this file works identically against Caido.** Burp and Caido
+  serve the *same* bridge protocol on the same loopback URL (default port 9009),
+  so which vendor is listening is auto-detected per reply — no flag declares it.
+  Records are then labelled `source: "burp"` or `source: "caido"` accordingly,
+  and `--source caido` filters to Caido's. Read every `-B http://127.0.0.1:9009`
+  below as "your Burp or Caido bridge."
 - The URL is validated: `http://` only, a **loopback host** (`127.0.0.1`, `::1`,
   or `localhost`), an explicit **port**, and **no path**. Anything else is a hard
   error before a request is made.
@@ -100,27 +106,50 @@ a `browser` object instead of a comparison.
 |---------|--------|
 | `vigolium traffic -B <url>` | merges live Proxy history **with** database records — one global sort/page over both sources |
 | `vigolium traffic -B <url> --save-to-vigolium-db` | persists the live records matching the active filters into the database |
-| `vigolium import -B <url>` | imports **all** Proxy history visible through the extension's Bridge settings |
+| `vigolium import -B <url> --host <h>` | imports the **filtered** subset of Proxy history (a filter, or `--all-hosts`, is required) |
 | `vigolium replay <filters> -B <url>` | bulk selection includes live Burp records alongside stored ones |
 | `vigolium agent autopilot -t <url> -B <url>` | pulls live Burp history into the project DB **before** the run, so the pre-scan and operator can mine it |
 | `vigolium server -B <url>` | merges live Burp traffic into `/api/http-records` |
 
-Live records carry `"source": "burp"` and a `burp:`-prefixed UUID. They have no
+Live records carry `"source": "burp"` (or `"caido"` when a Caido bridge answered
+— the vendor is detected per reply) and a `burp:`-prefixed UUID. They have no
 database row, which is why `replay --in-replace` refuses them.
 
 The bridge query is **skipped** (database-only) when the filter set can't be
-expressed over Burp's history: `--source` set to anything other than `burp`, or
-any min-risk-score / remark filter.
+expressed over the live history: `--source` set to anything other than the
+listening vendor (`burp`/`caido`), or any min-risk-score / remark filter.
 
 `import -B` is idempotent — changed responses are refreshed, unchanged requests
-are not duplicated — so re-running it during an engagement is safe. It takes no
-record filters; the extension's Bridge settings decide what's visible.
+are not duplicated — so re-running it during an engagement is safe.
+
+**It refuses an unfiltered pull.** Without a narrowing filter it errors (exit 2)
+rather than running, because an unfiltered import copies **every host the
+operator has ever browsed — carrying those hosts' cookies and tokens** — into
+your database. Where that database is shared with an autonomous agent, that is a
+cross-engagement leak: banking sessions, internal tools, an unrelated client's
+work.
+
+It accepts the same filters `traffic -B` does, spelled the same way:
+`--host` (wildcards), `--path`, `--method`, `--status`, `--search`,
+`--exclude-search`, `--from`/`--to`, `-n/--limit`. `--all-hosts` opts into the
+unfiltered form on purpose; `--yes` skips the pre-flight confirmation (which
+prints how many records are about to cross, before anything is written).
 
 ```bash
+# Correct: name what you want.
+vigolium import -B http://127.0.0.1:9009 --host acme.test
+
+# Refused (exit 2) — the error names the filters and the opt-in.
+vigolium import -B http://127.0.0.1:9009
+
+# Deliberate whole-history import, unattended.
+vigolium import -B http://127.0.0.1:9009 --all-hosts --yes
+
 # Survey what Burp has seen, without importing anything.
 vigolium traffic -B http://127.0.0.1:9009 --host acme.test --compact -j
 
-# Keep the subset worth scanning.
+# Keep the subset worth scanning. The WRITE is not bounded by -n's listing
+# default — an untyped -n no longer truncates the import at 100 records.
 vigolium traffic -B http://127.0.0.1:9009 --host acme.test --method POST \
   --save-to-vigolium-db
 
@@ -138,10 +167,18 @@ Three destinations, each answering a different question.
 | **Repeater** | one request you're about to hand-edit | `--to-repeater` |
 | **Site map** | populate Burp's Target tree with what vigolium found | `--save-to-burp` (replay, traffic) |
 
+On `finding`, `--push-to-burp` and `--to-repeater` are **independent** and
+compose — one invocation can file a finding in the Organizer *and* open it in
+Repeater, exactly as `replay --to-organizer --to-repeater` does. `--to-repeater`
+on its own still means Repeater only.
+
 ```bash
 # A finding's evidence → Organizer (default) or a Repeater tab
 vigolium finding --id 42 --push-to-burp -B http://127.0.0.1:9009
 vigolium finding --min-severity high --to-repeater -B http://127.0.0.1:9009
+
+# Both at once: file it and open it.
+vigolium finding --id 42 --push-to-burp --to-repeater -B http://127.0.0.1:9009
 
 # A replayed request → Repeater / Organizer / Site map
 vigolium replay -u <uuid> --to-repeater --repeater-tab idor -B http://127.0.0.1:9009
@@ -163,7 +200,9 @@ vigolium traffic --host acme.test --status 200 --save-to-burp -B http://127.0.0.
   at a glance.
 - `finding --to-repeater` names each tab `finding-<id>`; `replay --repeater-tab`
   defaults to `vigolium`.
-- `replay --notes` is capped at 200 chars; `--highlight` accepts
+- `replay --notes` longer than 200 chars is **truncated with an ellipsis and
+  warned about**, never rejected — losing a note's tail beats losing the
+  evidence. `--highlight` accepts
   `none|red|orange|yellow|green|cyan|blue|pink|magenta|gray`.
 - `finding` falls back to the finding's **inline** evidence bytes when its linked
   HTTP record is missing (imported audit findings, filtered exports). Findings
@@ -263,6 +302,8 @@ Mutually exclusive / rejected combinations:
 - `replay --in-replace` on a `burp:` UUID (live bridge records have no DB row)
 - `import -B` + positional paths or `--glob-db` (the bridge is an alternative
   source, not an additional one)
+- `import -B` with **no filter and no `--all-hosts`** — refused (exit 2) rather
+  than copying the operator's whole browsing history into the database
 
 ## Recipes
 
@@ -270,7 +311,9 @@ Mutually exclusive / rejected combinations:
 
 ```bash
 # 1. Browse the app through Burp as usual, then pull what it captured.
-vigolium import -B http://127.0.0.1:9009
+#    Name the host — an unfiltered pull is refused, and would drag in every
+#    other site you have browsed this session.
+vigolium import -B http://127.0.0.1:9009 --host acme.test
 
 # 2. Scan only the captured traffic — no crawling.
 vigolium scan --only dynamic-assessment -t https://acme.test --fail-on high
@@ -332,6 +375,8 @@ The diff between the two responses **is** the access-control check.
   on the request being sent. On `replay` the filter is `--header-search`.
 - `--send-via-burp` changes *how* the request is sent; `--proxy` only lets Burp
   *watch*. They are different channels — use the bridge when the bytes matter.
+- On `finding`, `--push-to-burp` and `--to-repeater` **compose** (they used to be
+  mutually exclusive). Same rule as `replay` now — one operation, one rule.
 - `--http-mode` without `--send-via-burp` is ignored (with a warning).
 - Live bridge records aren't in the database: they can't be updated
   (`--in-replace`) and vanish when Burp's history is cleared. `import -B` or
