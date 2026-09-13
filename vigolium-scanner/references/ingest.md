@@ -59,6 +59,15 @@ failed.
 An empty `--dir` match is a **hard error**: "ingested 0 records" for a typo'd
 path is indistinguishable from an empty capture.
 
+> **Under `-j`, a batch emits one JSON object per source - not one envelope for
+> the run.** `ingest -i a.har -i b.har -j` prints two objects, each with that
+> source's own `records_ingested`. A caller doing `... -j | jq .records_ingested`
+> reads only the **last** source's count and silently undercounts the batch. Sum
+> the objects (`jq -s 'map(.records_ingested) | add'`), or count for real
+> afterwards with `vigolium traffic -j --compact` and read `total`. The human
+> console has the same shape - one "Ingestion completed" line per source, under a
+> single `ingesting N source(s) in one process` header.
+
 > Concurrent `vigolium ingest` processes against one SQLite file are safe (every
 > open sets `busy_timeout`, WAL, and an immediate write lock, so writers
 > serialize instead of failing with `SQLITE_BUSY`). Batch mode is still the right
@@ -69,9 +78,10 @@ path is indistinguishable from an empty capture.
 | Flag | Description |
 |------|-------------|
 | `-t <url>` | Base URL / target for the ingested data (required for specs that carry only paths) |
-| `-i <file>` | Input file path (`-` for stdin) |
-| `-I <format>` | Input format (`urls`, `openapi`, `swagger`, `wsdl`, `burp`, `curl`, `har`, `postman`, `nuclei`, `burpscope`) |
-| `-T <file>` | Target-file: one target URL per line (for `urls`/`burpscope` only — a spec goes through `-i`) |
+| `-i <file>` | Input file path (`-` for stdin). Repeatable here - see [Batch ingest](#batch-ingest--n-files-one-process) |
+| `-I <format>` | Input format (`urls`, `openapi`, `swagger`, `wsdl`, `burp`, `curl`, `har`, `postman`, `nuclei`, `burpscope`). `vigolium --list-input-mode` prints them with examples |
+| `-T <file>` | Target-file: one target URL per line (for `urls`/`burpscope` only - a spec goes through `-i`). Repeatable; a comma in the path is literal |
+| `--input-read-timeout` | Deadline for reading stdin or a file (default `3m`, `0` disables). Raise it when piping a multi-GB export through stdin, where the read itself can outlast the default |
 | `--scan-on-receive` | After ingesting, scan the records (local mode only). `-S` is a **deprecated alias** here and warns — everywhere else `-S` means `--stateless`. |
 | `--spec-url` | Use server URLs from the OpenAPI/Swagger spec |
 | `--spec-header` | HTTP header(s) for OpenAPI/WSDL requests (repeatable) |
@@ -208,3 +218,25 @@ vigolium traffic --source ingest-cli --tree
 After ingesting, records are queryable with `vigolium traffic` (filter by
 `--source ingest-cli` / `ingest-server` / `ingest-proxy`) — see
 [data.md](data.md).
+
+## `ingest -j` output
+
+The standard envelope, with an empty `items` (`[]` — the payload is the sibling
+fields, not a row array):
+
+```jsonc
+{
+  "schema_version": 1, "command": "ingest", "items": [], "total": 1,
+  "records_ingested": 1,
+  "input_format": "har",          // what was PARSED  (har, burp, openapi, urls…)
+  "record_source": "ingest-cli",  // what was STORED in http_records.source
+  "duration_ms": 336,
+  "query": "vigolium traffic --json -n 20"
+}
+```
+
+**`input_format` and `record_source` are two different vocabularies** and must
+not be crossed: `--source` on a read filters by the *record source*, so
+`--source har` matches nothing. This pair replaces a single ambiguous `source`
+field that held the input format — if you parsed `.source` here, read
+`.input_format` now.

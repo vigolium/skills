@@ -52,11 +52,26 @@ section.
     while the scan runs. This is how you learn what a 15-minute crawl is doing;
     see "Watching a scan while it runs" below.
 - **One `-j` envelope, every command.** `{schema_version, command, project_uuid,
-  db_path, total, offset, limit, items, query}` — `items` is canonical. Each
-  command still writes its old row key (`records`, `findings`, `scans`, `rows`)
-  as a deprecated alias pointing at the same slice; **parse `items`**. Check
-  `schema_version` (and `vigolium version --json`, which also reports
-  `db_schema_version`) at startup rather than discovering drift at parse time.
+  project_scoped, db_path, total, offset, limit, items, query}` — `items` is the
+  row array, and now the only one. The old per-command names (`records`,
+  `findings`, `scans`, `rows`) duplicated every row **on the wire** and are no
+  longer emitted; `--json-legacy-keys` restores them for a caller still
+  migrating, at double the payload. Check `schema_version` (and `vigolium version
+  --json`, which also reports `db_schema_version`) at startup rather than
+  discovering drift at parse time. **Failures use the same spine**:
+  `{schema_version, command, ok:false, error:{code, message, exit_code}}` on
+  stdout, human text on stderr — so branch on `error.code` instead of scraping
+  prose: `usage_error` · `source_missing` · `source_unreadable` (not a database,
+  or corrupt) · `source_incompatible` (valid SQLite that is not a vigolium store)
+  · `gate_tripped` · `failed`.
+- **A wrong `--db` path does not error — it reads as empty.** Opening a database
+  *creates* it, so a typo'd or not-yet-scanned path returns `{"total":0,
+  "items":[]}` and **exit 0**, and pointing `--db` at another tool's SQLite file
+  writes vigolium's tables into it. "Nothing found" and "wrong file" are the same
+  output. Add **`--read-only`** to any read whose store must already exist: only
+  then does a missing path become `source_missing` and a foreign store become
+  `source_incompatible`. Otherwise assert `db_path` and sanity-check `total`
+  against a query you know matches.
 - **Non-interactive by default.** TUI is opt-in (`--tui`). Destructive commands
   need `--force`. Use `--no-color` (or `NO_COLOR=1`) for clean text.
 - **Everything is project-scoped** — `--project-name`, `--project-uuid`,
@@ -115,6 +130,7 @@ Full event table and field-by-field notes:
 | Scan a single URL with custom method/headers | `vigolium scan-url <url> --method POST --body '...'` |
 | Scan a raw HTTP request from file/stdin | `vigolium scan-request -i request.txt` |
 | Run only one scan phase | `vigolium run <phase>` or `scan --only <phase>` |
+| Sweep a big host list (httpx-style) | `vigolium run probe -T hosts.txt --json --no-response` |
 | Tune scan aggressiveness (phases + profile) | `vigolium scan -t <url> --intensity quick\|balanced\|deep` |
 | Content discovery with a custom wordlist | `vigolium scan -t <url> --discover --discovery-wordlist ./words.txt` |
 | Watch a running scan from a program | `vigolium scan -t <url> --events ndjson 2>/dev/null` |
@@ -122,6 +138,9 @@ Full event table and field-by-field notes:
 | Import an OpenAPI/Swagger spec and scan | `vigolium scan -I openapi -i spec.yaml -t <base-url>` |
 | Import Burp/HAR/cURL traffic | `vigolium scan -I burp -i export.xml` |
 | Filter modules by tag | `vigolium scan -t <url> --module-tag spring --module-tag injection` |
+| Analyze a target with **zero attack traffic** | `vigolium scan -t <url> --passive-only` |
+| One-shot scan, results on stdout, no DB | `vigolium scan -t <url> -S --silent --print-finding` |
+| Resume an interrupted fan-out run | `vigolium scan --resume` (bare, in the run's output dir) |
 | Ingest traffic without scanning | `vigolium ingest -t <url> -I openapi -i spec.yaml` |
 | Ingest many files in ONE process | `vigolium ingest -i a.har -i b.har` or `--dir ./captures --dir-glob '*.har'` |
 | Start the API server | `vigolium server` |
@@ -137,6 +156,7 @@ Full event table and field-by-field notes:
 | AI-confirm one finding | `vigolium agent triage 42` |
 | List agent sessions | `vigolium agent session` |
 | Browse stored HTTP traffic | `vigolium traffic` or `vigolium traffic <search>` |
+| Count records by a field instead of listing them | `vigolium traffic --group-by status_code` (`--group-limit N`) |
 | Browse findings | `vigolium finding` or `vigolium db ls findings` |
 | Compact agent JSON + linked records | `vigolium finding -j --with-records --min-severity high` |
 | Re-send one request + baseline diff | `vigolium replay --record-uuid <uuid>` |
@@ -175,7 +195,9 @@ Full event table and field-by-field notes:
 | Import an audit folder or JSONL/SQLite export | `vigolium import <path>` |
 | View runtime logs for a scan/agent run | `vigolium log <uuid>` (`-f` to follow) |
 | Initialize `~/.vigolium/` | `vigolium init` |
-| Health check | `vigolium doctor` |
+| Health check | `vigolium doctor` (`--fix` installs what's missing) |
+| Refresh nuclei templates without touching the binary | `vigolium update --skip-binary` |
+| Copy an extension authoring template | `vigolium ext example -l`, then `ext example <key>` |
 
 > **Which scan command?** Reach for `scan-url` / `scan-request` only when you're
 > testing **one specific request** — it already carries full query params, a deep
@@ -212,9 +234,9 @@ ran with a scope nobody chose.
 | `ffuf` / `feroxbuster` | `vigolium ffuf …` | `run discovery --discovery-wordlist`, or `fuzz https://t/FUZZ -w file-long` |
 | `nuclei` | `vigolium nuclei …` | `run known-issue-scan -t <url>` |
 | `katana` / `gospider` | `vigolium katana …` | `run spidering -t <url>` |
-| `gau` / `waybackurls` | `vigolium gau <domain>` | `kit harvest <domain>` |
+| `gau` / `waybackurls` | `vigolium gau <domain>` | `run external-harvest -t <url>` (into the DB), or `kit harvest <domain>` (stdout, no DB) |
 | `arjun` | `vigolium arjun -u <url>` | `fuzz --fuzz param-name --anomaly <url>` |
-| `httpx` | — | `scan -T hosts.txt --passive-only -S` then `traffic -j` |
+| `httpx` | — | `run probe -T hosts.txt --json` (aliases: `run httpx`/`alive`/`sweep`) |
 | `subfinder` / `amass` | — | **not covered** — pass a host list with `-T` |
 
 The shims are a redirect for muscle memory, not a full port: prefer the native
@@ -256,7 +278,14 @@ vigolium finding -j --min-severity high --compact --fields id,severity,module_id
 
 # 2. Drill — one finding, self-contained with its HTTP records.
 vigolium finding -j --id 42 --with-records
+
+# 0. Cheaper still — when the question is a shape, not a row set, count in SQL.
+vigolium traffic -j --group-by status_code --host target.example
 ```
+
+**Never dump rows to count them.** `--group-by` runs the same filters the listing
+would and returns buckets, so "what status codes did we see" costs a dozen
+integers instead of the corpus.
 
 Under `--json`, bodies are preview-capped with `body_size`/`body_sha256`/
 `body_truncated`, binaries are stubbed `body_omitted:"binary"`, and findings get
@@ -264,6 +293,43 @@ a ±240-char `response_evidence` snippet windowed on the match. The full
 shaping-flag table (`--compact`, `--fields`, `--full-body`, `--with-records`,
 `--min-severity`, `--pick`, `--markdown`, `--raw`, `--agentic-scan`) lives in
 `references/agent-loop.md`.
+
+Three things worth knowing about that habit — details in
+`references/agent-loop.md`:
+
+- **An unknown `--fields` name is a usage error** (exit 2) that lists the valid
+  set for that view, so a typo fails loudly instead of returning a row with the
+  key quietly missing. `--fields` composes with `--with-records`; use
+  `--record-fields` / `--record-limit` to shape the nested records.
+- **A gzip body over 1 MiB comes back as a prefix**, flagged `decoder_capped:
+  true` with `body_size`/`body_sha256` describing the *whole* body. When you see
+  that flag, do not conclude a string is absent — pull the body whole with
+  `vigolium db export --format fs --uuid <uuid>`.
+- **Read one record by identity with `traffic --uuid <uuid>`**, applied before
+  pagination. A UUID as the positional term searches text, not identity.
+
+## Global flags
+
+These work on **every** command, and a per-command flag of the same name wins.
+The ones an agent reaches for, beyond `-j`, `--db`, `--project-*`, `--format`,
+`--no-color` and `--silent` covered above:
+
+| Flag | Use it when |
+|------|-------------|
+| `--dump-traffic` | you need to see the actual bytes. Prints every request/response pair to **stderr**, Burp-style, bypassing the logger - so it composes with `-j` on stdout instead of corrupting it |
+| `--debug` | a scan behaves unexpectedly; adds debug-level logging **including outgoing request lines**. `-v/--verbose` is the milder step |
+| `--log-file <path>` | you want the run's logs as JSON on disk instead of scrolling past - the thing to attach to a bug report |
+| `--mem-limit` | a big crawl is being OOM-killed. A soft `GOMEMLIMIT` ceiling; default auto is ⅓ of RAM, scaled down by `-P` so the children together stay under ⅔. Takes `off`, `6GiB`, or `50%`. An existing `GOMEMLIMIT` env var overrides it |
+| `--read-only` | the database is evidence - no mkdir, no journal change, no checkpoint (see Invariants) |
+| `--skip-dependency-check` | a container/CI run must not stall on the first-run chromium + nuclei-template check |
+| `-M/--list-modules` | you want the module list without `module ls` |
+| `--list-input-mode` | you forget which `-I` values exist; prints each with an example |
+| `--width <n>` | table output is wrapping badly (default 70 columns) |
+| `--config <path>` | pinning a config file explicitly, the way `--db` pins the store |
+
+**`--dump-traffic` is the right debugging reflex, not `--debug`.** When the
+question is "what did we actually send", it answers directly and keeps stdout
+clean for a parser; `--debug` buries the same bytes in log lines.
 
 ## Invariants
 
@@ -278,16 +344,32 @@ Things `-h` won't tell you:
   `database.sqlite.path` in config → the built-in default. Pinning
   `$VIGOLIUM_DB_PATH` also makes **read** commands (`finding`/`traffic`/`log`/
   `fuzz -u`) treat that file as a stateless source — project scoping off — so an
-  agent can export it once and every read/write lands in the same session DB. It
-  never turns a *scan* stateless (that would clash with `--db`). A pinned path
-  that is **unusable is a hard error**, never a silent fall-through to the shared
-  default. Every `-j` envelope reports the `db_path` it actually opened — assert
-  it rather than trusting the pin.
+  agent can export it once and every read/write lands in the same session DB.
+  That flip only happens once the file **exists and is a usable vigolium store**;
+  before the session's first scan the same reads stay project-scoped, so check
+  `project_scoped` rather than assuming. It never turns a *scan* stateless (that
+  would clash with `--db`). "Unusable" here means a path that can never *become* a
+  database — a directory, or a parent dir that cannot be created or written — and
+  that is a hard error rather than a silent fall-through to the shared default; a
+  path that simply does not exist yet is fine and gets created. Every `-j`
+  envelope reports the `db_path` it actually opened — assert it rather than
+  trusting the pin. The envelope also reports `project_scoped`:
+  `true` means a project filter was applied and `project_uuid` names it; `false`
+  (under `-S`) means the rows span every project in the file.
 - **Exit codes are a table, not a boolean.** `0` success · `1` error · `2` usage
   error (bad flag or combination) · `3` `fuzz --fail-on-match` matched · `4`
   `--fail-on <sev>` gate tripped. **`4` is not a failure** — the scan ran to
   completion and found something. `--soft-fail` forces `0` everywhere.
+- **A positional argument to a scan command is always a target URL, never a
+  file.** `vigolium scan https://a https://b` is three ways of saying the same
+  thing as `-t`, and they merge with `-t`/`-T` with duplicates removed. But
+  `vigolium scan targets.txt` does **not** read the file — it scans the literal
+  string `targets.txt` as a target and reports `Targets: 1`. Files go through
+  `-T` (target lists) or `-i` (specs and request exports).
 - `--only` and `--skip` are mutually exclusive.
+- **`--passive-only` sends no attack traffic** (passive modules only, secret
+  detection included) and is on `scan`/`scan-url`/`scan-request` — **not** on
+  `run`. Reach for it when the brief is "look, don't touch".
 - `--format html`, `--format sqlite`, and any multi-value `--format` need a file
   destination: pass `-o/--output` **or** `--split-by-host` (which names per-host
   files from the hostname instead).
@@ -307,6 +389,36 @@ Things `-h` won't tell you:
   fuzzy match on active modules only.
 - Server mode requires API-key auth unless `-A`/`--no-auth`.
 - `db clean` with no selector is rejected. `db clean --all` needs `--force`.
+- **Opening a database writes to it by default** — `mkdir -p`, journal PRAGMAs, a
+  WAL checkpoint — so a plain read changes the file's SHA-256. `-S`/`--stateless`
+  is a *scoping* mode, not a read-only one. Pass **`--read-only`** when the source
+  is evidence: no directory creation, no journal change, no checkpoint, reads a
+  `chmod 444` file, and errors on a missing path instead of creating one. Refused
+  (exit 2) on commands that write.
+- **`traffic --uuid` / `db ls --uuid`** select exact records before pagination.
+  `replay -u` and `fuzz -u` also take a record UUID but **send traffic** — they
+  are never what a read suggests.
+- **The `query` hint in a `-j` envelope is always a valid read-only command**, so
+  it is safe to run. Re-sending requires asking for `replay`/`fuzz` explicitly.
+- **Errors under `-j` are JSON on stdout** (`{ok:false, error:{code,…}}`) with the
+  human line on stderr. Branch on `error.code`; never `2>&1` into a parser.
+- Every `-j` command uses the envelope, `--list-tables`/`--list-columns`
+  and `log ls` included.
+- `db export` validates its flags **before** opening `-o`, so a bad `--format`
+  leaves the existing file intact.
+- **`finding --id` takes the findings table's integer**, and rejects a UUID by
+  naming the flag that *does* read that namespace (`traffic --uuid` for a stored
+  record, `--agentic-scan` / `--scan-uuid` for a run). A UUID from another tool is
+  not a vigolium identifier: find the finding by content (`--search`) and read the
+  integer off that result. Never widen a failed exact lookup into a search that
+  returns different findings.
+- **`db export --uuid` narrows both halves of an `fs` tree** — the selected
+  record *and the findings linked to it*, not every finding in the store.
+- **`traffic --group-by <field>` counts instead of listing**, through the same
+  filters (`host`, `method`, `status_code`, `response_content_type`, `source`,
+  `scan_uuid`, `ip`, `is_authenticated`). Bounded by `--group-limit` (default 20,
+  `0` = all); the tail is reported as `other_groups`/`other_records` rather than
+  dropped. Reach for it before dumping rows to count them yourself.
 - `replay` has no `--mutate` — payload fuzzing is `vigolium fuzz`.
 - `fuzz` emits **no findings** and makes no verdict; it reports signals. Reach for
   `-a/--anomaly` before hand-writing matchers, then confirm hits with
@@ -359,9 +471,17 @@ maps to a scanning profile **and** strategy at once (also honored by `agent
 autopilot`/`swarm`). Explicit flags override it.
 
 **Phases** (for `--only`/`--skip`, or `vigolium run <phase>`), canonical name +
-aliases: `ingestion` · `discovery` (`deparos`,`discover`) · `external-harvest` ·
-`spidering` (`spitolas`) · `known-issue-scan` (`cve`,`kis`,`known-issues`) ·
-`dynamic-assessment` (`audit`,`dast`,`assessment`) · `extension` (`ext`).
+aliases: `ingestion` (`ingest`,`ingesting`) · `probe`
+(`probing`,`httpx`,`alive`,`sweep`) · `discovery`
+(`discover`,`discovering`,`deparos`) · `external-harvest`
+(`harvest`,`harvesting`,`external-harvester`) · `spidering`
+(`spider`,`spitolas`,`crawl`,`crawling`,`crawler`) · `known-issue-scan`
+(`cve`,`kis`,`known-issue`,`known-issues`) · `dynamic-assessment`
+(`dast`,`audit`,`assessment`,`assess`) · `extension` (`ext`,`extensions`).
+
+> `audit` is the one alias that is **not** universal: `--only audit` / `--skip
+> audit` work, but `vigolium run audit` is rejected as ambiguous with `vigolium
+> agent audit` (the AI source-code audit). Type `run dast` for the native phase.
 
 **Input** (`-I`, OpenAPI/WSDL auto-detect): `urls` (default) · `openapi` ·
 `swagger` · `wsdl` · `burp` · `curl` · `nuclei` · `har` · `postman` ·

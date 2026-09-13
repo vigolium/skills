@@ -17,6 +17,7 @@ scope → scan → read → confirm → hand off
 - [Mental model](#mental-model)
 - [Token discipline](#token-discipline)
 - [Step 1 — Scope](#step-1--scope)
+- [Step 1.5 — Sweep, when the scope is a host list](#step-15--sweep-when-the-scope-is-a-host-list)
 - [Step 2 — Scan and gate](#step-2--scan-and-gate)
 - [Watching a scan while it runs](#watching-a-scan-while-it-runs)
 - [Step 3 — Read the results](#step-3--read-the-results)
@@ -56,29 +57,79 @@ Under `--json`, `finding` and `traffic` keep headers and high-signal metadata bu
   `body_sha256`, and `body_truncated:true` so you know more exists.
 - Binary/static bodies (images, fonts, JS bundles, gzip) are stubbed as
   `{"body_omitted":"binary", …}`.
-- gzip is decoded transparently.
+- gzip is decoded transparently, but **only the first 1 MiB** — see the trap
+  below before you trust a decoded body.
 - Findings get a ±240-char `response_evidence` snippet windowed on the match
   instead of the whole page.
+
+**A gzip body over 1 MiB is capped, and says so.** The JSON decoder holds at most
+1 MiB, so a larger body comes back as a prefix — but the metadata describes the
+*whole* body, which is what lets you act on it:
+
+| Field | Meaning |
+|---|---|
+| `body_size` | size of the **complete** body, not of the prefix you got |
+| `body_truncated` | `true` whenever `body` is shorter than `body_size` (set under `--full-body` too) |
+| `body_sha256` | digest of the **complete** body — safe as a dedupe key |
+| `decoder_capped` | the 1 MiB decoder limit was hit; `--full-body` cannot lift it |
+| `decoder_hint` | names the command that returns the whole body |
+
+So `decoder_capped: true` means **do not conclude a string is absent** from this
+body. Pull it whole with the filesystem exporter, which has no such cap:
+
+```bash
+vigolium db export --format fs -o out --uuid "$RECORD_UUID"
+# → out-traffic/<host>/<id>.resp.body   (complete, gzip-decoded)
+```
 
 Control it:
 
 | Flag | Effect | Commands |
 |------|--------|----------|
-| `--compact` | metadata only, drop bodies — best for surveys | finding, traffic, db ls |
-| `--fields a,b,c` | project the JSON to just these top-level keys (cuts tokens hardest) | finding, traffic, db ls |
-| `--full-body` | complete decoded bodies — use when writing an exploit | finding, traffic, db ls |
-| `--with-records` | embed the linked HTTP records → self-contained triage bundle | finding |
+| `--compact` | metadata only, drop bodies — best for surveys. Also drops `request`/`response` entirely, so there is **no header access** under it | finding, traffic, db ls |
+| `--fields a,b,c` | project the JSON to just these top-level keys (cuts tokens hardest). An unknown name is a **usage error listing the valid set**, not a silent drop | finding, traffic, db ls |
+| `--full-body` | complete decoded bodies, except past the 1 MiB gzip cap — which is flagged `decoder_capped` | finding, traffic, db ls |
+| `--with-records` | embed the linked HTTP records → self-contained triage bundle. Capped at 20 per finding | finding |
+| `--record-limit N` | change that cap (`0` = no cap). Over the cap you get `records_total` + `records_truncated: true` | finding |
+| `--record-fields a,b` | project the **nested** records independently of `--fields` | finding |
 | `--min-severity` | threshold that expands upward (`high` → high + critical) | finding |
 | `--agentic-scan <uuid>` | every finding from an agent run (expands to the whole run tree) | finding |
 | `--pick N` | keep only the 1-based position(s) from the result list — `2`, `1,3`, `2-4` | finding |
 | `--markdown` | render as Markdown (evidence + fenced `http` blocks) instead of JSON | finding, traffic |
 | `--raw` | full raw HTTP request/response, human format | finding, traffic |
+| `--group-by <field>` | **count** the matched records by one field instead of listing them; `--group-limit N` bounds the buckets (default 20, `0` = all) | traffic |
 
 Rule of thumb: **survey with `--compact --fields`, then drill with `--id` +
 `--with-records`.** Never fetch full bodies for more than one record at a time.
 
-> `db stats -j` is the exception to the compact contract — it emits its raw
-> stats struct.
+And before either: if the question is a *shape* rather than a row set, count in
+SQL. `--group-by` applies the same filters the listing would, so the buckets
+describe exactly the rows `traffic` would have shown:
+
+```bash
+vigolium traffic -j --group-by status_code --host target.example
+# → items: [{value,count}…] plus group_by, total_records, other_groups, other_records
+```
+
+`total` is the number of **buckets**; `total_records` is how many records were
+counted. The tail past `--group-limit` is reported as `other_groups` /
+`other_records` — a capped grouping never looks complete. Groupable fields:
+`host`, `method`, `status_code`, `response_content_type`, `source`, `scan_uuid`,
+`ip`, `is_authenticated` (an unknown name is a usage error listing the set).
+
+`--fields` composes safely with `--with-records`: the projection narrows the
+finding's own keys and never removes the `records` array, because that was
+requested by a different flag. `--record-fields` narrows the nested rows.
+
+To discover the selectable names, ask for a bad one — the error lists the whole
+supported set for that view:
+
+```bash
+vigolium traffic -j --fields '?' 2>&1 | head -3
+```
+
+Note that JSON field names are not SQLite column names: the JSON key is `host`,
+the storage column is `hostname`. Go by the error's list, not by the schema.
 
 ## Step 1 — Scope
 
@@ -92,6 +143,40 @@ vigolium doctor --json
 # What modules exist / match a topic?
 vigolium module ls xss
 ```
+
+## Step 1.5 — Sweep, when the scope is a host list
+
+With more than a handful of targets, probe first and scan what's worth scanning.
+`run probe` sends one request per target — no discovery, no fuzzing — and streams
+JSONL on stdout (progress goes to stderr, so `2>/dev/null` or `--silent` gives a
+clean pipe):
+
+```bash
+vigolium run probe -T hosts.txt --json --no-response -c 50 2>/dev/null > sweep.jsonl
+
+# Alive + interesting, ranked by attack surface:
+jq -r 'select(.type=="http_record") | .data
+       | select(.status_code < 500)
+       | [.surface_score, .status_code, .url, .response_title] | @tsv' sweep.jsonl \
+  | sort -rn | head -40
+```
+
+Each record carries `status_code`, `response_time_ms`, `response_title`,
+`response_words`, `surface_score` (0-100, percent of the surface signals present), `ip`, and the full DNS
+answer (`a`/`aaaa`/`cname`). Add `--tls-probe` for the certificate (`tls` object:
+version, cipher, subject/SANs, issuer, validity, fingerprints). Field names match
+httpx's, so an existing consumer reads them unmodified.
+
+Then scan only the survivors:
+
+```bash
+jq -r 'select(.type=="http_record") | .data | select(.surface_score >= 30) | .url' \
+  sweep.jsonl > worth-scanning.txt
+vigolium scan -T worth-scanning.txt --fail-on high
+```
+
+Caveat: `a`/`aaaa`/`cname`/`tls` are **output-only** — re-reading the database
+later shows `ip` alone. Keep the JSONL, or re-probe.
 
 ## Step 2 — Scan and gate
 
@@ -476,6 +561,15 @@ vigolium finding --min-severity high      # reads acme.sqlite, scoping off
 vigolium scan -t https://acme.example     # writes into acme.sqlite
 ```
 
+The scoping-off flip is conditional: it applies once the pinned file **exists and
+is a usable vigolium store**. Run that `finding` before the first scan of the
+session and the read stays project-scoped against a store it just created — which
+is the right behavior (it prints an empty table instead of erroring), but means
+`project_scoped` is the field to check, not something to assume. A pin that can
+never *become* a database — a directory, or a parent dir that cannot be created —
+is a hard error rather than a silent fall-through to the shared default; a path
+that merely does not exist yet is fine.
+
 A stateless scan emits that `.sqlite` directly with `--format sqlite` (aliases
 `sqlite3`, `db`) — it dumps the per-run DB via `VACUUM INTO`, fully
 checkpointed, no WAL/SHM sidecars:
@@ -579,20 +673,61 @@ Full flags, intensities, and providers: `references/agent-modes.md`.
 
 ## The `-j` envelope
 
-Every `-j/--json` command emits the **same shape**, so one parser handles all of
-them. Do not write key fallbacks.
+Every `-j/--json` command emits the **same shape**, so one parser handles them
+all — including `log ls`, `ingest`, and `db ls --list-tables`/`--list-columns`.
+Parse `items`; do not write key fallbacks.
+
+Two shape notes that are not exceptions to the envelope, just to `items`:
+
+- `db stats -j` puts a summary **object** in `items`, not a row array — don't run
+  a universal `.items[]` over it.
+- `ingest -j` has an empty `items` (`[]`); its payload is the sibling fields
+  `records_ingested`, `input_format`, `record_source`, `duration_ms`.
+
+**Errors are JSON too.** A failed `-j` command writes a parseable error object to
+**stdout** and the human `✖ Error:` line to stderr, so a consumer never has to
+scrape prose:
+
+```jsonc
+{ "schema_version": 1, "command": "traffic", "ok": false,
+  "error": { "code": "source_missing", "message": "…", "exit_code": 1 } }
+```
+
+`error.code` is the stable branch point: `usage_error`, `source_missing`,
+`source_unreadable`, `source_incompatible`, `gate_tripped`, `failed`. A
+successful envelope has no `error` key. Still check the exit code — a parseable
+error is still an error.
+
+The three source codes exist because they are three different next moves, and
+they used to arrive as one indistinguishable failure:
+
+| `error.code` | What the file is | What to do |
+|---|---|---|
+| `source_missing` | nothing at that path (**needs `--read-only`** — see below) | fix the path |
+| `source_unreadable` | not a database, or corrupt | treat it as damaged evidence; do not "recover" it by reading somewhere else |
+| `source_incompatible` | **valid SQLite that is not a vigolium store** — it opens, passes an integrity check, and every read fails on a missing table (**needs `--read-only`**) | you are pointed at the wrong file (a zero-byte stub, another tool's database) |
+| *(no error, `total: 0`)* | a real vigolium store with no matching rows — **or**, without `--read-only`, a path that was wrong | nothing has scanned this yet — go scan it, after confirming the path |
+
+The last row is the one worth guarding, and it is wider than it looks. A store
+that was never a vigolium database and a target nobody has scanned are opposite
+facts, and reporting the first as "no traffic found" turns a wrong path into a
+thin attack surface. By default the two are genuinely indistinguishable: a read
+against a missing path *creates* an empty store there and returns `total: 0`,
+exit 0. Pass **`--read-only`** on reads that must hit an existing store and the
+two source codes above start firing; see the exit-code table for the full matrix.
 
 ```jsonc
 {
   "schema_version": 1,
   "command": "traffic",
   "project_uuid": "…",
+  "project_scoped": true,
   "db_path": "/home/me/.vigolium/database-vgnm.sqlite",
   "total": 39,
   "offset": 0,
   "limit": 100,
   "items": [ … ],
-  "query": "vigolium replay -u <uuid>",
+  "query": "vigolium traffic --uuid <uuid> --json --full-body",
   "generated_at": "2026-09-04T10:11:12.345Z",
   "generated_at_ms": 1788453072345
 }
@@ -601,12 +736,22 @@ them. Do not write key fallbacks.
 | Field | Why it is there |
 |---|---|
 | `schema_version` | Gate on it. Bumped on any breaking field change. |
-| `items` | **Canonical** row array. Each command also writes its historical key (`records`, `findings`, `scans`, `rows`, `stats`) as a *deprecated alias* pointing at the same slice — parse `items`, not the alias. |
+| `items` | **The** row array, and the only one. The pre-envelope names (`records`, `findings`, `scans`, `rows`, `stats`) are gone from the default output: they duplicated every row on the wire, which on a 20-record compact read was 19,983 bytes against 7,884 of actual rows. `--json-legacy-keys` (or `VIGOLIUM_JSON_LEGACY_KEYS=1`) brings the alias back for a caller still migrating, at that cost. |
 | `db_path` | The database this command actually opened. Assert it; the open order ends at one shared default file, so a fall-through silently mixes engagements. |
-| `query` | A ready follow-up command for the obvious next step. Run it rather than composing your own. |
+| `project_uuid` | The project that *would* apply — **not** proof a project filter was applied. Under `-S` scoping is off and the result spans every project, yet this field still names one. Treat it as advisory; `total` against the row count is the real check. |
+| `query` | A suggested follow-up. **Read it before running it** — see below. |
 | `generated_at` / `_ms` | RFC3339 with **exactly 3** fractional digits, plus an epoch-millisecond sibling. Both are safe to compare against a JS `toISOString()`; the old microsecond form sorted `…785113Z` *before* `…785Z`. |
 
-`db stats -j` uses this envelope too — it is no longer an exception.
+### The `query` hint
+
+Every hint is a valid, **read-only** command — running one never puts traffic on
+the wire. `traffic`/`db ls` hand back `traffic --uuid <uuid> --json --full-body`
+(inspect the record), `finding` hands back `finding --id <int> --json
+--with-records` (the evidence bundle), `ingest` hands back a plain recency
+listing.
+
+To re-send a request you must ask for it explicitly — `replay -u <uuid>` or
+`fuzz -u <uuid>`. Those are never suggested by a read.
 
 Check the contract once at startup:
 
@@ -629,6 +774,43 @@ something at or above the threshold — the opposite outcome from `1`, where it
 never got that far. Branch on them separately; treating every non-zero as
 breakage either ignores real outages or reports every finding as one.
 
+On the read commands:
+
+| Read | Exit | `error.code` |
+|---|---:|---|
+| `--fields bogus` | `2` | `usage_error` (lists the valid names) |
+| `--db <not a sqlite file>` | `1` | `source_unreadable` |
+| `--db <missing file>` | **`0`** | **none** — the file is *created*, `{"total":0,"items":[]}` |
+| `--db <missing file> --read-only` | `1` | `source_missing` |
+| `--db <sqlite, but not a vigolium store>` | **`0`** | **none** — vigolium's tables are created *inside it*, `{"total":0,"items":[]}` |
+| `--db <foreign sqlite, unwritable> --read-only` | `1` | `source_incompatible` |
+| `finding --id <a UUID>` | `2` | `usage_error` (names the flag that reads that namespace) |
+| `traffic --group-by <unknown field>` | `2` | `usage_error` (lists the groupable fields) |
+| `--id 999999` (no such finding) | `0` | —, `{"total":0,"items":[]}` |
+| `--search zzzznomatch` (genuine zero hits) | `0` | —, `{"total":0,"items":[]}` |
+
+**The bolded rows are the trap.** Opening a database writes to it — that is what
+lets `scan --db ~/new.sqlite` work on a fresh path — so a *read* against a wrong
+path does not fail. It creates the store, finds nothing in it, and reports
+`total: 0` with exit 0, indistinguishable from a target nobody has scanned. The
+foreign-store case is worse: vigolium creates its own tables inside another
+tool's SQLite file.
+
+`source_missing` and `source_incompatible` therefore only reach you when the open
+is prevented from writing. **Add `--read-only` to any read whose store is
+supposed to already exist** — it is the flag that converts both silent zeroes
+into the error you wanted, and it costs nothing on a store that is really there.
+`source_unreadable` needs no such help: a non-SQLite file fails either way.
+
+Failing that, assert the envelope's `db_path`, and check `total` against a second
+query you know matches — the same technique that separates "`--id 999999` does
+not exist" from "`--search` legitimately matched nothing", which are also one
+result.
+
+Always check the exit code before parsing — and never `2>&1` into a JSON parser:
+the machine object is on stdout, the human line on stderr, and merging them
+corrupts the stream.
+
 `--fail-on <info\|suspect\|low\|medium\|high\|critical>` on `scan`/`run`/
 `scan-url`/`scan-request` exits `4` when a finding at or above that severity is
 present. **Output is always written first** — the gate only changes the exit
@@ -642,13 +824,31 @@ parent batch fails only when every target fails.
   commands where it has no meaning — no per-command acceptance table needed. The
   one holdout is deprecated: on `server`/`ingest` it is still an alias for
   `--scan-on-receive` and warns. Use the long `--scan-on-receive` there.
-- `$VIGOLIUM_DB_PATH` pointing at an **unusable** path is now a hard error, not a
-  silent fall-through to the shared default database. Read `db_path` off any
-  `-j` envelope to confirm which store you actually got.
+- `$VIGOLIUM_DB_PATH` pointing at a path that can never hold a database (a
+  directory, an uncreatable parent) is a hard error, not a silent fall-through to
+  the shared default. A path that simply does not exist yet is created. Read
+  `db_path` off any `-j` envelope to confirm which store you actually got.
 - `vigolium log <uuid> | cat` terminates promptly even when the scan row still
   says `running` (a deadline or SIGKILL leaves it that way forever). Auto-follow
   is off for a non-TTY stdout and for a stale row; pass `--follow` to force it.
 - `--json` (one compact object) ≠ `--format jsonl` (bulk, one line per row).
+- **Fetch one record by UUID with `traffic --uuid <uuid>`** (also on `db ls`,
+  repeatable/comma-separated). It is an exact equality match applied **before**
+  pagination, so `-n`/`--offset` can never hide a match. A UUID passed as the
+  *positional* term still matches 0 rows — that searches URL/path/body, not
+  identity, so use the flag.
+- **`-S`/`--stateless` is a scoping mode, not a read-only one.** By default,
+  opening any database writes to it: `mkdir -p` on the parent, a `journal_mode`
+  PRAGMA (a header rewrite) and a WAL checkpoint. Pass **`--read-only`** when the
+  source is evidence — it skips all three, leaves the file's SHA-256 unchanged,
+  creates no sidecars, reads a `chmod 444` file fine, and errors on a missing
+  path instead of creating an empty database there. It is accepted on the read
+  commands and refused (exit 2) on anything that writes.
+- `db export` validates `--format`, `-o` and the date range **before** opening
+  the destination, so a rejected run leaves an existing file intact.
+- `db export --uuid` works on every format including `--format fs`, and is
+  applied in SQL before paging, so a record outside the current page is found
+  rather than reported missing.
 - `replay` has no `--mutate` — payload fuzzing lives entirely in `vigolium fuzz`.
 - `--with-browser` produces **no diff** — a navigation has no status code or
   body to compare, so `result` is null and a `browser` object is emitted instead.

@@ -328,6 +328,7 @@ confirmation command against the hardened module scanner.
 | `--delay <ms>` | per-worker delay before each request — the polite knob for rate-limited targets |
 | `--timeout` | per-request (default 25s); `--max-time` is the curl alias |
 | `--no-redirects` | stop following 30x (following is the default) |
+| `--max-redirs` | cap the chain instead of severing it (`0` = Go's default of 10). The curl spelling; use it when a target loops redirects and a wordlist run would otherwise spend its budget in the loop |
 | `--auth-session <name>` | merge headers from a stored session (`vigolium auth list`) |
 | `--session-id <id>` | persist cookies across runs, same jar as `replay` (`~/.vigolium/replay-jars/`) |
 | `--no-cookies` | opt out of the jar |
