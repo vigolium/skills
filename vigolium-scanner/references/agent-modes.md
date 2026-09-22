@@ -236,7 +236,10 @@ When input is piped via stdin, it is automatically read (no `--input` needed). T
 | `--resume` | — | string | — | Resume a prior durable-autopilot run by its **agentic-scan UUID**: reuses its session dir, project, target, and durable scratchpad/candidates; skips pre-scan + audit re-prep (requires `agent.olium.autopilot_mode` != `legacy`) |
 | `--session-dir` | — | string | — | Pin the session directory for this run's debug artifacts (transcript, runtime.log, scratchpad). Default `<agent.sessions_dir>/<run-uuid>` |
 | `--transcript` | — | string | — | After the run, also copy the session's `transcript.jsonl` to this path (in-session copy is always kept — handy with `-S`/throwaway DBs) |
-| `--db-isolate` | — | bool | `false` | Scan into a private temp DB, then merge into `--db` at the end (SQLite only; lets parallel agent runs share one DB) |
+| `--db-isolate` | — | bool | `false` | Scan into a private temp DB, then merge into `--db` at the end (SQLite only; lets parallel agent runs share one DB). Ignored with a warning under `-S`, which keeps no database to merge |
+| `--stateless` | `-S` | bool | `false` | Run the whole autopilot into a throwaway temp DB (project DB untouched), then materialize `--format` outputs from it. Mirrors `scan -S`. **Required for any file-producing `--format`** — without it the run is rejected rather than silently writing nothing. Not valid with `--db` or `--resume` |
+| `--output` | `-o` | string | — | Output base for the `-S` export; each `--format` appends its own extension. Defaults to `vigolium-result/vigolium-autopilot`. Only applies with `-S` |
+| `--prompt-file` | — | string | — | Read task guidance from a file (same channel as `--prompt`, so role-tagged credentials in it still become primary/compare sessions). Mutually exclusive with `--prompt`, the positional `[prompt]`, and `--plan-file` |
 | `--skill` | — | []string | — | Force-load these skills by name, bypassing the pre-flight skill selection (repeatable or comma-separated) |
 | `--skill-tag` | — | []string | — | Force-load every skill carrying one of these tags (e.g. `xss,idor`) |
 | `--no-skill-filter` | — | bool | `false` | Load the full skill set; skip the pre-flight skill selection |

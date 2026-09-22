@@ -75,18 +75,25 @@ Under `--json`, `finding` and `traffic` keep headers and high-signal metadata bu
 | `decoder_hint` | names the command that returns the whole body |
 
 So `decoder_capped: true` means **do not conclude a string is absent** from this
-body. Pull it whole with the filesystem exporter, which has no such cap:
+body. Pull it whole with `traffic body`, which writes the bytes straight to a
+file:
 
 ```bash
-vigolium db export --format fs -o out --uuid "$RECORD_UUID"
-# → out-traffic/<host>/<id>.resp.body   (complete, gzip-decoded)
+vigolium traffic body --uuid "$RECORD_UUID" -o resp.body      # decoded, one call
+vigolium traffic body --uuid "$RECORD_UUID" --representation stored -o resp.gz
 ```
+
+Past the decoder ceiling, `decoded` refuses rather than writing a prefix
+(`body_incomplete`) — take `--representation stored` for the complete compressed
+bytes, or `--allow-incomplete` if a prefix really is enough. `db export --format
+fs -o out --uuid "$RECORD_UUID"` still works and writes a whole tree
+(`out-traffic/<host>/<id>.resp.body`) when you want the record's other parts too.
 
 Control it:
 
 | Flag | Effect | Commands |
 |------|--------|----------|
-| `--compact` | metadata only, drop bodies — best for surveys. Also drops `request`/`response` entirely, so there is **no header access** under it | finding, traffic, db ls |
+| `--compact` | metadata only, drop bodies — best for surveys. Also drops `request`/`response` entirely, so there is **no header access** under it (use `traffic headers` for that) | finding, traffic, db ls |
 | `--fields a,b,c` | project the JSON to just these top-level keys (cuts tokens hardest). An unknown name is a **usage error listing the valid set**, not a silent drop | finding, traffic, db ls |
 | `--full-body` | complete decoded bodies, except past the 1 MiB gzip cap — which is flagged `decoder_capped` | finding, traffic, db ls |
 | `--with-records` | embed the linked HTTP records → self-contained triage bundle. Capped at 20 per finding | finding |
@@ -98,9 +105,20 @@ Control it:
 | `--markdown` | render as Markdown (evidence + fenced `http` blocks) instead of JSON | finding, traffic |
 | `--raw` | full raw HTTP request/response, human format | finding, traffic |
 | `--group-by <field>` | **count** the matched records by one field instead of listing them; `--group-limit N` bounds the buckets (default 20, `0` = all) | traffic |
+| `-o/--output <path>` | with `--json`, write the result document to a file and print a small receipt (path, bytes, sha256, `complete`) instead — the document never enters your context | finding, traffic, db ls |
 
 Rule of thumb: **survey with `--compact --fields`, then drill with `--id` +
 `--with-records`.** Never fetch full bodies for more than one record at a time.
+
+When you want the rows on disk rather than in context, `-o` is the cheapest
+option in the surface: the file is byte-identical to what the command would have
+printed, and stdout carries only the receipt. `complete: false` in that receipt
+means the file holds one page — raise `-n/--limit` (or `-a` on `traffic`) for the
+whole set. `-o -` forces the document back to stdout.
+
+```bash
+vigolium finding -j -n 500 -o findings.json   # ~65 KB to disk, ~7 lines to you
+```
 
 And before either: if the question is a *shape* rather than a row set, count in
 SQL. `--group-by` applies the same filters the listing would, so the buckets
@@ -693,28 +711,43 @@ scrape prose:
   "error": { "code": "source_missing", "message": "…", "exit_code": 1 } }
 ```
 
-`error.code` is the stable branch point: `usage_error`, `source_missing`,
-`source_unreadable`, `source_incompatible`, `gate_tripped`, `failed`. A
-successful envelope has no `error` key. Still check the exit code — a parseable
-error is still an error.
+`error.code` is the stable branch point. A successful envelope has no `error`
+key. Still check the exit code — a parseable error is still an error.
 
-The three source codes exist because they are three different next moves, and
-they used to arrive as one indistinguishable failure:
+**Source codes** — three different next moves, and they used to arrive as one
+indistinguishable failure:
 
 | `error.code` | What the file is | What to do |
 |---|---|---|
-| `source_missing` | nothing at that path (**needs `--read-only`** — see below) | fix the path |
+| `source_missing` | nothing at that path | fix the path |
 | `source_unreadable` | not a database, or corrupt | treat it as damaged evidence; do not "recover" it by reading somewhere else |
-| `source_incompatible` | **valid SQLite that is not a vigolium store** — it opens, passes an integrity check, and every read fails on a missing table (**needs `--read-only`**) | you are pointed at the wrong file (a zero-byte stub, another tool's database) |
-| *(no error, `total: 0`)* | a real vigolium store with no matching rows — **or**, without `--read-only`, a path that was wrong | nothing has scanned this yet — go scan it, after confirming the path |
+| `source_incompatible` | **valid SQLite that is not a vigolium store** — it opens and passes an integrity check, but has none of vigolium's tables | you are pointed at the wrong file (a zero-byte stub, another tool's database) |
+| *(no error, `total: 0`)* | a real vigolium store with no matching rows | nothing has scanned this yet — go scan it |
 
-The last row is the one worth guarding, and it is wider than it looks. A store
-that was never a vigolium database and a target nobody has scanned are opposite
-facts, and reporting the first as "no traffic found" turns a wrong path into a
-thin attack surface. By default the two are genuinely indistinguishable: a read
-against a missing path *creates* an empty store there and returns `total: 0`,
-exit 0. Pass **`--read-only`** on reads that must hit an existing store and the
-two source codes above start firing; see the exit-code table for the full matrix.
+Those four are now genuinely distinct on a read. **A pure read command
+(`traffic`, `finding`, `db ls`, `db stats`, `db export`, `export`, `log`,
+`traffic body`, `traffic headers`) against an explicitly pinned `--db` or
+`$VIGOLIUM_DB_PATH` never creates a store**: a path that is not there fails
+`source_missing`, and one that is there but is not a vigolium database fails
+`source_incompatible`. Neither needs `--read-only` any more — that flag is now
+only about leaving the file byte-identical (below).
+
+The built-in default database is still created on first use, because a fresh
+install's first `vigolium traffic` legitimately has nothing to read yet.
+
+**Single-message extraction codes** (`traffic body`, `traffic headers`) — the
+states that a filesystem export used to collapse into an empty file:
+
+| `error.code` | Meaning |
+|---|---|
+| `record_not_found` | no record carries that `--uuid` |
+| `body_unavailable` | the record exists, but the requested side was never captured |
+| `body_decode_failed` | the body announces an encoding that could not be undone (try `--representation stored`) |
+| `body_incomplete` | only a prefix is available; pass `--allow-incomplete` to take it anyway |
+
+A body that *was* captured and is genuinely zero-length **succeeds**, with
+`empty: true` in the receipt. That is not the same as never having been
+captured, and the two no longer share an answer.
 
 ```jsonc
 {
@@ -774,38 +807,50 @@ something at or above the threshold — the opposite outcome from `1`, where it
 never got that far. Branch on them separately; treating every non-zero as
 breakage either ignores real outages or reports every finding as one.
 
+**A requested artifact that was not written is exit `1`, code `export_failed`** —
+even when the scan itself ran clean, and even when it would otherwise have
+tripped the `--fail-on` gate. The gate's whole premise is that the output was
+written before the code was chosen; when it wasn't, exit `4` would send you to
+read a file that does not exist. Retry the export, not the scan: the findings
+reached the database, they just did not reach your `-o`. Formats are attempted
+independently, so with `--format jsonl,sqlite` one of them may well be on disk —
+the "Exports" summary on stderr lists what actually landed.
+
 On the read commands:
 
 | Read | Exit | `error.code` |
 |---|---:|---|
 | `--fields bogus` | `2` | `usage_error` (lists the valid names) |
 | `--db <not a sqlite file>` | `1` | `source_unreadable` |
-| `--db <missing file>` | **`0`** | **none** — the file is *created*, `{"total":0,"items":[]}` |
-| `--db <missing file> --read-only` | `1` | `source_missing` |
-| `--db <sqlite, but not a vigolium store>` | **`0`** | **none** — vigolium's tables are created *inside it*, `{"total":0,"items":[]}` |
-| `--db <foreign sqlite, unwritable> --read-only` | `1` | `source_incompatible` |
+| `--db <missing file>` | `1` | `source_missing` — **nothing is created** |
+| `--db <sqlite, but not a vigolium store>` | `1` | `source_incompatible` — **no tables are added to it** |
 | `finding --id <a UUID>` | `2` | `usage_error` (names the flag that reads that namespace) |
 | `traffic --group-by <unknown field>` | `2` | `usage_error` (lists the groupable fields) |
+| `traffic body --uuid <no such record>` | `1` | `record_not_found` |
+| `traffic body --uuid <request with no response>` | `1` | `body_unavailable` |
+| `scan -S -o <unwritable path>` | `1` | `export_failed` — the scan ran; the artifact did not land |
 | `--id 999999` (no such finding) | `0` | —, `{"total":0,"items":[]}` |
 | `--search zzzznomatch` (genuine zero hits) | `0` | —, `{"total":0,"items":[]}` |
 
-**The bolded rows are the trap.** Opening a database writes to it — that is what
-lets `scan --db ~/new.sqlite` work on a fresh path — so a *read* against a wrong
-path does not fail. It creates the store, finds nothing in it, and reports
-`total: 0` with exit 0, indistinguishable from a target nobody has scanned. The
-foreign-store case is worse: vigolium creates its own tables inside another
-tool's SQLite file.
+Those first source rows used to be the trap, and are worth knowing about because
+**older vigolium builds behave differently**: opening a database writes to it —
+which is what lets `scan --db ~/new.sqlite` work on a fresh path — so a *read*
+against a wrong path used to create the store, find nothing, and report
+`total: 0` with exit 0, indistinguishable from a target nobody had scanned. The
+foreign-store case was worse: vigolium created its own tables inside another
+tool's SQLite file. On a build with those rows as shown, neither happens on a
+pure read of a pinned source.
 
-`source_missing` and `source_incompatible` therefore only reach you when the open
-is prevented from writing. **Add `--read-only` to any read whose store is
-supposed to already exist** — it is the flag that converts both silent zeroes
-into the error you wanted, and it costs nothing on a store that is really there.
-`source_unreadable` needs no such help: a non-SQLite file fails either way.
+The last two rows are still one answer each way, so to tell "no such finding"
+from "`--search` legitimately matched nothing", assert the envelope's `db_path`
+and check `total` against a second query you know matches.
 
-Failing that, assert the envelope's `db_path`, and check `total` against a second
-query you know matches — the same technique that separates "`--id 999999` does
-not exist" from "`--search` legitimately matched nothing", which are also one
-result.
+`--read-only` is now about a *different* guarantee: the source file survives the
+read **byte-identical**, with no journal-mode flip, no WAL checkpoint, and no
+`-wal`/`-shm` siblings left beside it. Use it when the store is evidence or under
+chain of custody. It costs nothing on a current store, but it cannot migrate an
+old one — a store written by an older vigolium fails with a schema error instead
+of being upgraded in place, which is the point.
 
 Always check the exit code before parsing — and never `2>&1` into a JSON parser:
 the machine object is on stdout, the human line on stderr, and merging them
@@ -839,11 +884,13 @@ parent batch fails only when every target fails.
   identity, so use the flag.
 - **`-S`/`--stateless` is a scoping mode, not a read-only one.** By default,
   opening any database writes to it: `mkdir -p` on the parent, a `journal_mode`
-  PRAGMA (a header rewrite) and a WAL checkpoint. Pass **`--read-only`** when the
-  source is evidence — it skips all three, leaves the file's SHA-256 unchanged,
-  creates no sidecars, reads a `chmod 444` file fine, and errors on a missing
-  path instead of creating an empty database there. It is accepted on the read
-  commands and refused (exit 2) on anything that writes.
+  PRAGMA (a header rewrite) and a WAL checkpoint. A pure read no longer *creates*
+  a store at a pinned path that has none (see the exit-code table), but it does
+  still touch one that is there. Pass **`--read-only`** when the source is
+  evidence — it skips all three, leaves the file's SHA-256 unchanged, leaves no
+  `-wal`/`-shm` siblings behind, and reads a `chmod 444` file fine. It is
+  accepted on the read commands and refused (exit 2) on anything that writes, and
+  it cannot migrate an old store (that fails with a schema error instead).
 - `db export` validates `--format`, `-o` and the date range **before** opening
   the destination, so a rejected run leaves an existing file intact.
 - `db export --uuid` works on every format including `--format fs`, and is

@@ -76,11 +76,47 @@ vigolium kit js-beautify app.min.js                     # local file
 vigolium kit js-beautify https://target.example/main.abc.js
 cat bundle.js | vigolium kit js-beautify -              # stdin
 vigolium kit js-beautify -j --extract app.min.js        # + extracted endpoints
+vigolium kit js-beautify --modules ./out app.min.js     # one file per module
 ```
 
 Default: beautified source to stdout (input emitted unchanged if it is neither
-minified nor bundled). `--extract` also runs endpoint extraction; under `-j` the
-result carries `{changed, format, module_count, content, endpoints?}`.
+minified nor bundled). `--extract` also runs endpoint extraction.
+
+| Flag | Effect |
+|------|--------|
+| `--extract` | also run endpoint extraction (a full analysis pass); included in `-j` output |
+| `--modules <dir>` | write each recovered module to its own file under `<dir>`, at its recovered path |
+| `-o, --output <file>` | write the beautified source to a file instead of stdout (`-` means stdout) |
+| `--profile <p>` | `beautify` \| `endpoints` \| `discovery` \| `discovery-lite` \| `full` \| `inspect` \| `dom-security` \| `legacy`; default depends on `--extract` |
+| `--unpack-modules` | unpack a bundle and re-scan each module for endpoints (implies `--extract`) |
+| `--max-ast-nodes` | AST node budget before the analysis degrades to a per-module scan (0 = engine default, 500k) |
+| `--max-input-mb` | **lowers** the input ceiling only; it cannot raise it above the service limit |
+| `--deadline` | analysis deadline (0 = engine default, 60s) |
+| `--timeout` | fetch timeout for a URL argument (default 30s) |
+
+JSON: `{source, status, changed, format, module_count, module_paths?, bytes_in,
+bytes_out, content, endpoints?, diagnostics?, output_path?, modules_dir?,
+modules_written?}`. Endpoints carry `{url, method, params, body, headers,
+cookies, extractor, confidence, module_path?}`.
+
+**Read `status` before trusting `endpoints`.** `complete` is a clean AST pass.
+`partial` means some stages did not run, and the `diagnostics` codes say which.
+`failed` means the analysis produced nothing of its own.
+
+**A big bundle returns `partial`, and that is the good outcome.** A script dense
+enough to blow the AST budget cannot be parsed whole, so the engine unpacks it
+and analyzes each module separately (`ast_budget_recovered_by_module_scan`).
+Those endpoints carry `extractor: "bundle-module"` and a `module_path`, with real
+methods, headers and body templates. A `partial` from that path is far better
+data than a `complete` from a small file.
+
+**An empty `method` means unresolved, not GET.** The `large-input-string-fallback`
+extractor is a regex sweep over source that no analyzer could parse; it recovers
+URLs only. Treat `confidence: "low"` plus an empty method as a lead to confirm,
+never as a request to replay.
+
+For a bundle of any size, prefer `--modules <dir>` over reading `content`: a
+400-module document is one 5 MB blob, and the directory is greppable.
 
 ## oast (new / poll)
 
@@ -195,6 +231,12 @@ Classes: `cmdi`, `crlf`, `lfi`, `open_redirect`, `path_traversal`, `sqli`,
   only after one interval), so a short `--wait` still polls at least twice.
 - **secret-scan safelists placeholders.** `AKIA…EXAMPLE` and `123456`-sequence
   tokens are treated as benign — use real-looking values to test.
+- **`js-beautify` never exits non-zero for a degraded analysis.** A bundle that
+  only half-analyzed still exits 0; `status` and `diagnostics` are the only
+  signal. Check them, not the exit code.
+- **`js-beautify --max-input-mb` cannot raise the ceiling.** The service takes
+  the lower of this and its own limit (10 MiB by default), so a larger value is
+  silently ignored. Raise `jstangle.hard_input_mb` in config instead.
 - **Exit 3 gates.** `secret-scan --fail-on-match` and `jwt-crack --fail-on-crack`
   exit 3 on a hit. Otherwise 0 success, 1 error, 2 usage error — see
   [agent-loop.md → Exit codes](agent-loop.md#exit-codes).

@@ -253,16 +253,24 @@ Comma-separated for alternatives. A bare `--match-time 500` means `>=500`.
 ```bash
 --match-status-code 200,301     --exclude-status-code 404
 --match-size '>1000'            --exclude-size 0
---match-words 50-80             --match-lines '!0'
---match-regex 'root:.*:0:0'     --match-time '>500'
---match-time-z '>3'             # needs --baseline-samples > 1
+--match-words 50-80             --exclude-words 0
+--match-lines '!0'              --exclude-lines '<5'
+--match-regex 'root:.*:0:0'     --exclude-regex 'Not Found'
+--match-time '>500'             --exclude-time '<50'
+--match-time-z '>3'             --exclude-time-z '>4'   # need --baseline-samples > 1
 --match-header 'Location: /admin'          # regex on the value
 --match-header Location                    # presence only
+--exclude-header 'Server: nginx'           # same grammar, inverted
 --match-mode all                           # require every category (default: any)
 ```
 
+The full twin set is `--exclude-status-code`, `--exclude-size`,
+`--exclude-words`, `--exclude-lines`, `--exclude-regex`, `--exclude-time`,
+`--exclude-time-z` and `--exclude-header` — each takes exactly the grammar its
+`--match-*` counterpart does.
+
 `--match-status-code all` keeps every status. `--exclude-mode` is the twin of
-`--match-mode`.
+`--match-mode` (`any` = OR, the default; `all` = AND).
 
 Reflection is reported in three parts, because conflating them hides the
 difference between "this might execute" and "the app escaped it":

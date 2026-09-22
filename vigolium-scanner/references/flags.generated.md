@@ -107,6 +107,8 @@ run `vigolium <command> -h`.
 - [vigolium storage upload](#vigolium-storage-upload)
 - [vigolium strategy](#vigolium-strategy)
 - [vigolium traffic](#vigolium-traffic)
+- [vigolium traffic body](#vigolium-traffic-body)
+- [vigolium traffic headers](#vigolium-traffic-headers)
 - [vigolium update](#vigolium-update)
 - [vigolium version](#vigolium-version)
 
@@ -243,7 +245,7 @@ Agentic scan: autonomous AI-driven vulnerability scanning
 | `--skill` | - | stringSlice | - | Force-load these skills by name, bypassing the pre-flight selection (repeatable or comma-separated) |
 | `--skill-tag` | - | stringSlice | - | Force-load every skill carrying one of these tags (e.g. xss,idor) |
 | `--source` | - | string | - | Path to application source code for source-aware scanning |
-| `--stateless` | `-S` | bool | `false` | Run the whole autopilot into a throwaway temporary database (your project DB is left untouched), then materialize --format outputs from it. Mirrors 'vigolium scan -S'. Not valid with --db, --db-isolate, or --resume. |
+| `--stateless` | `-S` | bool | `false` | Run the whole autopilot into a throwaway temporary database (your project DB is left untouched), then materialize --format outputs from it. Mirrors 'vigolium scan -S'. Not valid with --db or --resume; --db-isolate is ignored alongside it. |
 | `--system-prompt` | - | string | - | Replace the built-in autopilot system prompt with this value (full replace; browser section is not auto-appended) |
 | `--system-prompt-file` | - | string | - | Path to a file whose contents replace the built-in autopilot system prompt (takes precedence over --system-prompt) |
 | `--target` | `-t` | string | - | Target URL (derived from --input if not set) |
@@ -604,14 +606,14 @@ List database records (default: http_records)
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--asc` | - | bool | `false` | Sort in ascending order instead of descending |
-| `--body` | - | string | - | Search within request or response body content |
+| `--body` | - | string | - | Search only the HTTP request/response body (not headers); use --search to span the whole exchange |
 | `--columns` | - | stringSlice | - | Columns to include in output, comma-separated |
 | `--compact` | - | bool | `false` | With --json, emit metadata only (omit request/response bodies). --markdown already compacts response bodies by default; use --full-body to render them whole |
 | `--fields` | - | stringSlice | - | Restrict --json output to these top-level keys (comma-separated, e.g. id,severity,url). An unknown name is an error, not a silent drop |
 | `--finding-source` | - | string | - | Filter findings by source (dynamic-assessment, spa, agent, oast, source-tools, extension) |
 | `--from` | - | string | - | Show records at or after this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339 (alias: --since) |
 | `--full-body` | - | bool | `false` | Render complete request/response bodies (no truncation/stubbing) with --json, and whole (uncompacted) bodies with --markdown |
-| `--header` | - | string | - | Search within HTTP header names and values |
+| `--header` | - | string | - | Search only the HTTP header block of the request/response (not bodies); use --search to span the whole exchange |
 | `--host` | - | string | - | Filter records by hostname pattern (wildcard supported) |
 | `--limit` | `-n` | int | `100` | Maximum number of records to display |
 | `--list-columns` | - | bool | `false` | List column names for the current table |
@@ -621,6 +623,7 @@ List database records (default: http_records)
 | `--min-surface` | - | int | `0` | Show only records with attack-surface score at or above this value (0-100, percent of the attack-surface signals present) |
 | `--module-type` | - | string | - | Filter findings by module type (active, passive, nuclei, agent, source-tools, oast, extension) |
 | `--offset` | - | int | `0` | Number of records to skip before displaying |
+| `--output` | `-o` | string | - | With --json: write the result document to this file and print a receipt instead; '-' forces stdout |
 | `--path` | - | string | - | Filter records by URL path pattern |
 | `--raw` | - | bool | `false` | Show full raw HTTP request and response |
 | `--record-kind` | - | string | - | Filter by record kind (finding, candidate, observation; comma-separated). Default: finding |
@@ -631,6 +634,7 @@ List database records (default: http_records)
 | `--status` | - | intSlice | - | Filter records by HTTP status code (can be specified multiple times) |
 | `--to` | - | string | - | Show records at or before this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339; a bare date covers the whole day (alias: --until) |
 | `--tree` | - | bool | `false` | Display results in hierarchical tree format |
+| `--url` | - | stringArray | - | Select records whose URL matches EXACTLY (repeatable; OR-ed). Compared against the stored URL with no normalization — use --path or --search for substring matching |
 | `--uuid` | - | stringSlice | - | Select exact stored record(s) by UUID (repeatable/comma-separated). Applied before pagination |
 
 ## vigolium db reset
@@ -789,22 +793,22 @@ Browse vulnerability findings with fuzzy search and filtering
 |------|-------|------|---------|-------------|
 | `--agentic-scan` | - | string | - | Filter by agentic-scan UUID (findings produced by an agent autopilot/swarm/audit run) |
 | `--asc` | - | bool | `false` | Sort in ascending order (default: descending) |
-| `--body` | - | string | - | Search within HTTP request/response body content |
+| `--body` | - | string | - | Search only the linked request/response body (not headers); use --search to span the whole exchange |
 | `--burp` | - | bool | `false` | Display in Burp Suite-style format (colored request/response) |
 | `--burp-bridge-url` | `-B` | string | - | Loopback Burp/Caido bridge URL used by --push-to-burp / --to-repeater (alias: --caido-bridge-url) |
 | `--columns` | - | stringSlice | - | Columns to show (comma-separated, e.g. ID,SEVERITY,MODULE) |
 | `--compact` | - | bool | `false` | With --json, emit metadata only (omit request/response bodies). --markdown already compacts response bodies by default; use --full-body to render them whole |
 | `--confidence` | - | string | - | Filter by confidence: certain,firm,tentative (comma-separated) |
-| `--exclude-body` | - | string | - | Exclude findings whose linked request/response body contains the term (inverse of --body) |
+| `--exclude-body` | - | string | - | Exclude findings whose linked request/response body contains the term (inverse of --body; bodies only) |
 | `--exclude-columns` | - | stringSlice | - | Columns to hide (comma-separated) |
-| `--exclude-header` | - | string | - | Exclude findings whose linked request/response headers contain the term (inverse of --header) |
+| `--exclude-header` | - | string | - | Exclude findings whose linked request/response header block contains the term (inverse of --header; headers only) |
 | `--exclude-search` | - | stringArray | - | Exclude findings where the term appears in the module metadata, matched location, or linked request/response (repeatable; dropped if ANY term matches — the inverse of --search) |
 | `--fields` | - | stringSlice | - | Restrict --json output to these top-level keys (comma-separated, e.g. id,severity,url). An unknown name is an error, not a silent drop |
 | `--finding-source` | - | string | - | Filter by finding source (dynamic-assessment, spa, agent, oast, source-tools, extension) |
 | `--from` | - | string | - | Show findings at or after this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339 (alias: --since) |
 | `--full-body` | - | bool | `false` | Render complete request/response bodies (no truncation/stubbing) with --json, and whole (uncompacted) bodies with --markdown |
 | `--glob-db` | - | string | - | Read across a glob of result files merged into one temporary DB (e.g. --glob-db 'scans/*.sqlite'); implies -S |
-| `--header` | - | string | - | Search within HTTP header names and values |
+| `--header` | - | string | - | Search only the HTTP header block of the linked request/response (not bodies); use --search to span the whole exchange |
 | `--host` | - | string | - | Filter by hostname pattern (wildcard supported) |
 | `--http-mode` | - | string | - | With --send-via-burp: wire protocol — auto\|http1\|http2\|http2_ignore_alpn (default auto) |
 | `--id` | - | string | - | Filter by finding ID (the integer from the ID column, e.g. --id 42) |
@@ -815,6 +819,7 @@ Browse vulnerability findings with fuzzy search and filtering
 | `--module-type` | - | string | - | Filter by module type (active, passive, nuclei, agent, source-tools, oast, extension) |
 | `--no-tui` | - | bool | `false` | Force TUI off (escape hatch if TUI ever becomes default) |
 | `--offset` | - | int | `0` | Number of findings to skip (for pagination) |
+| `--output` | `-o` | string | - | With --json: write the result document to this file and print a receipt instead; '-' forces stdout |
 | `--path` | - | string | - | Filter by URL path pattern |
 | `--pick` | - | string | - | Select finding(s) by 1-based position in the result list (e.g. 2, 1,3, 2-4); applied after --search/filters and sort |
 | `--push-to-burp` | - | bool | `false` | Push the selected finding(s)' evidence request+response to Burp's Organizer for manual confirmation; requires --burp-bridge-url |
@@ -984,7 +989,7 @@ Ingest HTTP requests into database (locally or via server)
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--concurrency` | `-c` | int|phase=int | `50` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
+| `--concurrency` | `-c` | int|phase=int | `25` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
 | `--dir` | - | string | - | Ingest every matching file in this directory in one process (pairs with -I to fix the format, and --dir-glob to narrow the match) |
 | `--dir-glob` | - | string | `*` | Filename pattern for --dir (e.g. '*.har') |
 | `--disable-fetch-response` | - | bool | `false` | Store requests without fetching responses during ingestion |
@@ -1002,7 +1007,7 @@ Ingest HTTP requests into database (locally or via server)
 | `--no-waf-pacing` | - | bool | `false` | Disable proactive CDN/WAF-edge pacing (don't pre-throttle per-host concurrency when a CloudFront/Cloudflare/etc. edge is detected); reactive back-off after a WAF block still applies |
 | `--rate-limit` | `-r` | int|phase=int | `100` | Global requests/second cap, applied to native scanning AND known-issue-scan. Applies at its documented default even when unset; pass 0 for no cap. Accepts a phase qualifier, repeatable: --rate-limit known-issue-scan=20 |
 | `--scan-on-receive` | - | bool | `false` | Continuously scan new HTTP records as they arrive in the database |
-| `--scope-origin` | - | string | - | Host scope strictness: all, relaxed, balanced, strict |
+| `--scope-origin` | - | string | - | Host scope strictness: all, relaxed, balanced, strict (default balanced; balanced admits any host sharing the target's eTLD+1, including subdomains already in the database from earlier scans) |
 | `--server` | `-s` | string | - | Server URL for remote ingestion (omit for local mode) |
 | `--spec-default` | - | string | `1` | Fallback value for required OpenAPI parameters that lack examples |
 | `--spec-header` | - | stringArray | - | Add HTTP header to OpenAPI-generated requests (repeatable; commas are literal) |
@@ -1063,8 +1068,15 @@ Unminify and unpack a JavaScript bundle into readable source
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
+| `--deadline` | - | duration | `0s` | Analysis deadline (0 = engine default) |
 | `--extract` | - | bool | `false` | Also extract endpoints/requests (a full analysis pass); included in -j output |
+| `--max-ast-nodes` | - | int | `0` | Maximum parsed AST nodes before the analysis degrades to a per-module scan (0 = engine default) |
+| `--max-input-mb` | - | int | `0` | Lower the input size limit, in MiB; cannot raise it above the service ceiling (0 = engine default) |
+| `--modules` | - | string | - | Write each recovered bundle module to its own file under this directory |
+| `--output` | `-o` | string | - | Write the beautified source to this file instead of stdout |
+| `--profile` | - | string | - | Analysis profile (beautify, endpoints, discovery, discovery-lite, full, inspect, dom-security, legacy); default depends on --extract |
 | `--timeout` | - | duration | `30s` | Timeout for fetching a URL argument |
+| `--unpack-modules` | - | bool | `false` | Unpack a detected bundle and re-scan each module for endpoints (implies --extract) |
 
 ## vigolium kit jwt-crack
 
@@ -1379,8 +1391,8 @@ Run a single native scan phase (alias for scan --only <phase>)
 | `--auth-file` | - | stringArray | - | Path to auth file (YAML/JSON, single session or sessions: bundle), or bare name resolved against scanning_strategy.session.session_dir. Repeatable; commas are literal. |
 | `--browser-engine` | `-E` | string | `chromium` | Browser engine: 'chromium', 'ungoogled', or 'fingerprint' |
 | `--browsers` | `-b` | int | `1` | Number of parallel browser instances for spidering |
-| `--concurrency` | `-c` | int|phase=int | `50` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
-| `--db-isolate` | - | bool | `false` | Scan into a private temporary database, then merge results into --db (or the default DB) at the end — lets many parallel scans share one --db without write contention (SQLite only, not with --stateless; combine with -P -T to fan out targets and export one unified output from the merged DB) |
+| `--concurrency` | `-c` | int|phase=int | `25` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
+| `--db-isolate` | - | bool | `false` | Scan into a private temporary database, then merge results into --db (or the default DB) at the end — lets many parallel scans share one --db without write contention (SQLite only; ignored under --stateless, which keeps nothing to merge; combine with -P -T to fan out targets and export one unified output from the merged DB) |
 | `--discover` | - | bool | `false` | Enable content discovery phase before scanning |
 | `--discover-max-time` | - | duration | `1h0m0s` | Max time for content discovery per target |
 | `--discovery-wordlist` | - | string | - | Custom wordlist path seeding the discovery phase (enables fuzzing on the fly). Formerly --fuzz-wordlist; distinct from 'vigolium fuzz -w'. |
@@ -1426,15 +1438,15 @@ Run a single native scan phase (alias for scan --only <phase>)
 | `--print-traffic-tree` | - | bool | `false` | After the scan, print the run's HTTP traffic to stdout as a host/path hierarchy tree, like 'vigolium traffic --tree'. Pairs well with -S and --silent. |
 | `--probe` | - | bool | `false` | Enable the host-sweep phase: one request per target, passive tech fingerprinting + surface scoring, no content discovery or fuzzing (same as 'vigolium run probe') |
 | `--rate-limit` | `-r` | int|phase=int | `100` | Global requests/second cap, applied to native scanning AND known-issue-scan. Applies at its documented default even when unset; pass 0 for no cap. Accepts a phase qualifier, repeatable: --rate-limit known-issue-scan=20 |
-| `--record-redirect-chain` | - | bool | `false` | Store every followed redirect hop as its own http_records row, chained by parent_uuid, instead of keeping only the final response. Read by the probe phase; on by default under 'run probe'. |
-| `--redirect-mode` | - | string | - | Which redirects to follow: off \| same-host \| same-apex \| any (default any). 'same-apex' follows within the registrable domain, so www.example.com -> example.com follows but example.com -> tracker.example.net does not. |
+| `--record-redirect-chain` | - | bool | `false` | Store a followed redirect's hops as their own http_records rows, chained by parent_uuid, instead of keeping only the final response. Canonical hops (scheme upgrade, trailing slash, www.) collapse into their destination row, and a chain stores at most 4 rows, keeping the first and the last. Read by the probe phase; on by default under 'run probe'. |
+| `--redirect-mode` | - | string | - | Which redirects to follow: off \| same-host \| same-apex \| any (default any; 'run probe' defaults to same-apex). 'same-apex' follows within the registrable domain, so www.example.com -> example.com follows but example.com -> tracker.example.net does not. Every mode also stops at a login/SSO wall, whatever its host, and records the 3xx instead. |
 | `--report-url` | - | string | - | URL for the "Raw Report URL" button in HTML reports (overrides VIGOLIUM_REPORT_SHARED_URL) |
 | `--required-only` | - | bool | `false` | Parse only required fields from input format (ignore optional) |
 | `--resume` | - | bool | `false` | Resume a prior -S -T --split-by-host -P run from its progress manifest (<output>.progress.json): skip targets that already completed cleanly and scan only the remainder. Run bare ('vigolium scan --resume', no other flags) to auto-discover the *.progress.json in the current directory and relaunch the saved run from it (pass -o <prefix> to disambiguate when several exist) |
 | `--retries` | - | int | `1` | Number of retry attempts for failed requests |
 | `--scanning-max-duration` | - | duration | `0s` | Maximum total scan duration (overrides config, e.g. 1h, 30m) |
 | `--scanning-profile` | - | string | - | Scanning profile name or YAML file path |
-| `--scope-origin` | - | string | - | Host scope strictness: all, relaxed, balanced, strict |
+| `--scope-origin` | - | string | - | Host scope strictness: all, relaxed, balanced, strict (default balanced; balanced admits any host sharing the target's eTLD+1, including subdomains already in the database from earlier scans) |
 | `--skip` | - | stringSlice | - | Skip these phases (repeatable: ingestion, probe, discovery, external-harvest, spidering, known-issue-scan, dynamic-assessment; aliases accepted, see `vigolium run --help`) |
 | `--skip-format-validation` | - | bool | `false` | Skip validation of input file format |
 | `--skip-heuristics` | - | bool | `false` | Disable pre-scan heuristics (equivalent to --heuristics-check=none) |
@@ -1466,8 +1478,8 @@ Run a native scan — deterministic multi-phase vulnerability scanning
 | `--auth-file` | - | stringArray | - | Path to auth file (YAML/JSON, single session or sessions: bundle), or bare name resolved against scanning_strategy.session.session_dir. Repeatable; commas are literal. |
 | `--browser-engine` | `-E` | string | `chromium` | Browser engine: 'chromium', 'ungoogled', or 'fingerprint' |
 | `--browsers` | `-b` | int | `1` | Number of parallel browser instances for spidering |
-| `--concurrency` | `-c` | int|phase=int | `50` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
-| `--db-isolate` | - | bool | `false` | Scan into a private temporary database, then merge results into --db (or the default DB) at the end — lets many parallel scans share one --db without write contention (SQLite only, not with --stateless; combine with -P -T to fan out targets and export one unified output from the merged DB) |
+| `--concurrency` | `-c` | int|phase=int | `25` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
+| `--db-isolate` | - | bool | `false` | Scan into a private temporary database, then merge results into --db (or the default DB) at the end — lets many parallel scans share one --db without write contention (SQLite only; ignored under --stateless, which keeps nothing to merge; combine with -P -T to fan out targets and export one unified output from the merged DB) |
 | `--discover` | - | bool | `false` | Enable content discovery phase before scanning |
 | `--discover-max-time` | - | duration | `1h0m0s` | Max time for content discovery per target |
 | `--discovery-wordlist` | - | string | - | Custom wordlist path seeding the discovery phase (enables fuzzing on the fly). Formerly --fuzz-wordlist; distinct from 'vigolium fuzz -w'. |
@@ -1515,15 +1527,15 @@ Run a native scan — deterministic multi-phase vulnerability scanning
 | `--print-traffic-tree` | - | bool | `false` | After the scan, print the run's HTTP traffic to stdout as a host/path hierarchy tree, like 'vigolium traffic --tree'. Pairs well with -S and --silent. |
 | `--probe` | - | bool | `false` | Enable the host-sweep phase: one request per target, passive tech fingerprinting + surface scoring, no content discovery or fuzzing (same as 'vigolium run probe') |
 | `--rate-limit` | `-r` | int|phase=int | `100` | Global requests/second cap, applied to native scanning AND known-issue-scan. Applies at its documented default even when unset; pass 0 for no cap. Accepts a phase qualifier, repeatable: --rate-limit known-issue-scan=20 |
-| `--record-redirect-chain` | - | bool | `false` | Store every followed redirect hop as its own http_records row, chained by parent_uuid, instead of keeping only the final response. Read by the probe phase; on by default under 'run probe'. |
-| `--redirect-mode` | - | string | - | Which redirects to follow: off \| same-host \| same-apex \| any (default any). 'same-apex' follows within the registrable domain, so www.example.com -> example.com follows but example.com -> tracker.example.net does not. |
+| `--record-redirect-chain` | - | bool | `false` | Store a followed redirect's hops as their own http_records rows, chained by parent_uuid, instead of keeping only the final response. Canonical hops (scheme upgrade, trailing slash, www.) collapse into their destination row, and a chain stores at most 4 rows, keeping the first and the last. Read by the probe phase; on by default under 'run probe'. |
+| `--redirect-mode` | - | string | - | Which redirects to follow: off \| same-host \| same-apex \| any (default any; 'run probe' defaults to same-apex). 'same-apex' follows within the registrable domain, so www.example.com -> example.com follows but example.com -> tracker.example.net does not. Every mode also stops at a login/SSO wall, whatever its host, and records the 3xx instead. |
 | `--report-url` | - | string | - | URL for the "Raw Report URL" button in HTML reports (overrides VIGOLIUM_REPORT_SHARED_URL) |
 | `--required-only` | - | bool | `false` | Parse only required fields from input format (ignore optional) |
 | `--resume` | - | bool | `false` | Resume a prior -S -T --split-by-host -P run from its progress manifest (<output>.progress.json): skip targets that already completed cleanly and scan only the remainder. Run bare ('vigolium scan --resume', no other flags) to auto-discover the *.progress.json in the current directory and relaunch the saved run from it (pass -o <prefix> to disambiguate when several exist) |
 | `--retries` | - | int | `1` | Number of retry attempts for failed requests |
 | `--scanning-max-duration` | - | duration | `0s` | Maximum total scan duration (overrides config, e.g. 1h, 30m) |
 | `--scanning-profile` | - | string | - | Scanning profile name or YAML file path |
-| `--scope-origin` | - | string | - | Host scope strictness: all, relaxed, balanced, strict |
+| `--scope-origin` | - | string | - | Host scope strictness: all, relaxed, balanced, strict (default balanced; balanced admits any host sharing the target's eTLD+1, including subdomains already in the database from earlier scans) |
 | `--skip` | - | stringSlice | - | Skip these phases (repeatable: ingestion, probe, discovery, external-harvest, spidering, known-issue-scan, dynamic-assessment; aliases accepted, see `vigolium run --help`) |
 | `--skip-format-validation` | - | bool | `false` | Skip validation of input file format |
 | `--skip-heuristics` | - | bool | `false` | Disable pre-scan heuristics (equivalent to --heuristics-check=none) |
@@ -1550,7 +1562,7 @@ Scan a raw HTTP request for vulnerabilities
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--concurrency` | `-c` | int|phase=int | `50` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
+| `--concurrency` | `-c` | int|phase=int | `25` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
 | `--discover` | - | bool | `false` | Run content discovery before scanning |
 | `--events` | - | string | - | Emit a machine-readable event stream to stdout while the scan runs: 'ndjson' (one JSON object per line, flushed per event). The human console stays on stderr, so a driver reads the stream with 2>/dev/null. Events: scan.started, phase.started/progress/finished, waf.block, waf.pacing, finding.new, error, scan.finished. |
 | `--external-harvest` | - | bool | `false` | Run external intelligence harvesting before scanning |
@@ -1588,7 +1600,7 @@ Scan a single URL for vulnerabilities
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--body` | - | string | - | Request body |
-| `--concurrency` | `-c` | int|phase=int | `50` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
+| `--concurrency` | `-c` | int|phase=int | `25` | Number of concurrent scan workers. Accepts a phase qualifier, repeatable: --concurrency discovery=10 |
 | `--discover` | - | bool | `false` | Run content discovery before scanning |
 | `--events` | - | string | - | Emit a machine-readable event stream to stdout while the scan runs: 'ndjson' (one JSON object per line, flushed per event). The human console stays on stderr, so a driver reads the stream with 2>/dev/null. Events: scan.started, phase.started/progress/finished, waf.block, waf.pacing, finding.new, error, scan.finished. |
 | `--external-harvest` | - | bool | `false` | Run external intelligence harvesting before scanning |
@@ -1808,15 +1820,15 @@ Browse or replay HTTP traffic (alias: db ls --table http_records)
 |------|-------|------|---------|-------------|
 | `--all` | `-a` | bool | `false` | List/replay every matched record (ignore the -n/--limit cap); pair with --replay to re-send all stored traffic |
 | `--asc` | - | bool | `false` | Sort in ascending order (default: descending) |
-| `--body` | - | string | - | Search within HTTP request/response body content |
+| `--body` | - | string | - | Search only the HTTP request/response body (not headers); use --search to span the whole exchange |
 | `--burp` | - | bool | `false` | Display in Burp Suite-style format (colored request/response) |
 | `--burp-bridge-url` | `-B` | string | - | Merge live traffic from this loopback Burp/Caido bridge URL with local database records (alias: --caido-bridge-url) |
 | `--columns` | - | stringSlice | - | Columns to show (comma-separated, e.g. HOST,METHOD,PATH,STATUS) |
 | `--compact` | - | bool | `false` | With --json, emit metadata only (omit request/response bodies). --markdown already compacts response bodies by default; use --full-body to render them whole |
 | `--concurrency` | `-c` | int | `10` | Concurrent replays (--replay); keep low to avoid overwhelming an intercepting proxy like Burp |
-| `--exclude-body` | - | string | - | Exclude records whose request/response body contains the term (inverse of --body) |
+| `--exclude-body` | - | string | - | Exclude records whose request/response body contains the term (inverse of --body; bodies only, not headers) |
 | `--exclude-columns` | - | stringSlice | - | Columns to hide (comma-separated) |
-| `--exclude-header` | - | string | - | Exclude records whose HTTP header names/values contain the term (inverse of --header) |
+| `--exclude-header` | - | string | - | Exclude records whose HTTP header block contains the term (inverse of --header; headers only, not bodies) |
 | `--exclude-search` | - | stringArray | - | Exclude records where the term appears in the URL, path, or raw request/response (repeatable; dropped if ANY term matches — the inverse of --search) |
 | `--fields` | - | stringSlice | - | Restrict --json output to these top-level keys (comma-separated, e.g. id,severity,url). An unknown name is an error, not a silent drop |
 | `--from` | - | string | - | Show records at or after this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339 (alias: --since) |
@@ -1824,7 +1836,7 @@ Browse or replay HTTP traffic (alias: db ls --table http_records)
 | `--glob-db` | - | string | - | Read across a glob of result files merged into one temporary DB (e.g. --glob-db 'scans/*.sqlite'); implies -S |
 | `--group-by` | - | string | - | Count the matched records by one field instead of listing them (host, ip, is_authenticated, method, response_content_type, scan_uuid, source, status_code). Runs the same filters as the listing |
 | `--group-limit` | - | int | `20` | With --group-by: maximum groups to show, largest first (0 = every group). The tail is reported as a count, never dropped |
-| `--header` | - | string | - | Search within HTTP header names and values |
+| `--header` | - | string | - | Search only the HTTP header block of the request/response (not bodies); use --search to span the whole exchange |
 | `--host` | - | string | - | Filter by hostname pattern (wildcard supported) |
 | `--in-replace` | - | bool | `false` | With --replay: overwrite each stored response with the new replay response |
 | `--limit` | `-n` | int | `100` | Maximum records to display |
@@ -1832,6 +1844,7 @@ Browse or replay HTTP traffic (alias: db ls --table http_records)
 | `--method` | - | stringSlice | - | Filter by HTTP method (repeatable, e.g. --method GET --method POST) |
 | `--no-tui` | - | bool | `false` | Force TUI off (escape hatch if TUI ever becomes default) |
 | `--offset` | - | int | `0` | Number of records to skip (for pagination) |
+| `--output` | `-o` | string | - | With --json: write the result document to this file and print a receipt instead; '-' forces stdout |
 | `--path` | - | string | - | Filter by URL path pattern |
 | `--raw` | - | bool | `false` | Show full raw HTTP request and response |
 | `--replay` | - | bool | `false` | Re-send the matched requests and compare original vs new response (instead of listing) |
@@ -1846,8 +1859,36 @@ Browse or replay HTTP traffic (alias: db ls --table http_records)
 | `--to` | - | string | - | Show records at or before this time — 2d, 12h, 30m, today, yesterday, 2026-08-05, "2026-08-05 14:30", or RFC3339; a bare date covers the whole day (alias: --until) |
 | `--tree` | - | bool | `false` | Display as host/path hierarchy tree |
 | `--tui` | - | bool | `false` | Open interactive TUI (arrow keys to navigate, enter to view details, c to copy id) |
+| `--url` | - | stringArray | - | Select records whose URL matches EXACTLY (repeatable; OR-ed). Compared against the stored URL with no normalization — use --path or --search for substring matching |
 | `--uuid` | - | stringSlice | - | Select exact stored record(s) by UUID (repeatable/comma-separated). Applied before pagination, so a match is never missed because it fell outside -n |
 | `--with-browser` | - | bool | `false` | Replay each URL through a real browser routed via --proxy (--replay), so Burp captures browser-driven traffic |
+
+## vigolium traffic body
+
+Extract one stored request or response body
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--allow-incomplete` | - | bool | `false` | Write the body even when the capture is known to be incomplete (the receipt still reports complete: false) |
+| `--output` | `-o` | string | - | Write to this file instead of stdout; '-' forces stdout |
+| `--representation` | - | string | `decoded` | Body representation: 'decoded' removes supported content encodings (gzip); 'stored' returns the bytes exactly as captured |
+| `--request` | - | bool | `false` | Read the request side |
+| `--response` | - | bool | `false` | Read the response side (default) |
+| `--stateless` | `-S` | bool | `false` | Read from --db (a standalone .sqlite) with project scoping off; never writes to your project DB |
+| `--uuid` | - | string | - | UUID of the stored record to read (required) |
+
+## vigolium traffic headers
+
+Read one stored message's headers without its body
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--name` | - | string | - | Return only entries with this header name (case-insensitive); every matching entry is returned, not just the first |
+| `--output` | `-o` | string | - | Write to this file instead of stdout; '-' forces stdout |
+| `--request` | - | bool | `false` | Read the request side |
+| `--response` | - | bool | `false` | Read the response side (default) |
+| `--stateless` | `-S` | bool | `false` | Read from --db (a standalone .sqlite) with project scoping off; never writes to your project DB |
+| `--uuid` | - | string | - | UUID of the stored record to read (required) |
 
 ## vigolium update
 

@@ -318,6 +318,7 @@ List database records with filtering, sorting, and display options. The target t
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--uuid` | []string | — | Select exact stored record(s) by UUID (repeatable/comma-separated), applied before pagination |
+| `--url` | []string | — | Select records whose URL matches **exactly** (repeatable; OR-ed). No normalization — use `--path`/`--search` for substring matching |
 | `--host` | string | — | Filter by hostname pattern (wildcard supported) |
 | `--method` | []string | — | Filter by HTTP method |
 | `--status` | []int | — | Filter by HTTP status code |
@@ -332,8 +333,8 @@ List database records with filtering, sorting, and display options. The target t
 | `--record-kind` | string | `finding` | Filter findings table by record kind (finding, candidate, observation; comma-separated) |
 | `--from` | string | — | Records after date (YYYY-MM-DD or RFC3339) |
 | `--to` | string | — | Records before date (YYYY-MM-DD or RFC3339) |
-| `--header` | string | — | Search within HTTP header names and values |
-| `--body` | string | — | Search in request/response body |
+| `--header` | string | — | Search **only the header block** of the request/response — not bodies. Use `--search` to span the whole exchange |
+| `--body` | string | — | Search **only the request/response body** — not headers. Use `--search` to span the whole exchange |
 
 ### Sorting flags
 
@@ -403,7 +404,9 @@ vigolium db ls --raw --limit 5
 
 Show database statistics including record counts, finding breakdowns, and host summaries.
 
-Under `-j/--json` it emits the **standard envelope** like every other read command (stats under `items`, aliased as `stats`). It used to be a documented exception that dumped its raw struct — a contract with a hole in it is one consumers special-case forever.
+Under `-j/--json` it emits the **standard envelope** like every other read command (stats under `items`, aliased as `stats`). It used to be a documented exception that dumped its raw struct — a contract with a hole in it is one consumers special-case forever. Note `items` here is an **object**, not a row array, so `total`/`offset`/`limit` describe the one report.
+
+`items.database` names the source: `path` is the file actually opened and `size` is its bytes **including the `-wal`/`-shm` siblings** — on a WAL store the main file alone can be a fraction of what the store occupies. Both used to be declared and never filled, so every `db stats -j` reported `"path": "", "size": 0` for a database it had open. The human view carries the same as a `Source:` line under `Driver:`.
 
 ### stats-specific flags
 
@@ -580,6 +583,8 @@ Browse vulnerability findings with fuzzy search, filtering, raw display, and col
 
 Also accepts: `--host`, `--method`, `--status`, `--path`, `--from`, `--to`, `--source`, plus `--search` (repeatable, AND-combined; searches module metadata, matched location, and the linked request/response), `--header`, `--body`, and their inverses `--exclude-search` (repeatable), `--exclude-header`, `--exclude-body`.
 
+Every search term is matched **literally**: `%` and `_` are ordinary characters, not SQL wildcards, so `--body 'api_key'` does not also match `api-key` and `--body '100%'` does not match everything. `--host`/`--path` remain patterns where `*` is the wildcard.
+
 ### Finding → Burp push flags (triage handoff)
 
 Hand each selected finding's evidence request (and response, where available) to Burp for manual confirmation. This is an action, not a display: it returns before any table/JSON render and never runs the scanner. Only `finding` has these (traffic/`db ls` do not).
@@ -698,6 +703,7 @@ redirect: `a.example` (301) → `www.a.example` (302) → the 200 that answered.
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--uuid` | []string | — | Select exact stored record(s) by UUID (repeatable/comma-separated). Applied **before** pagination, so `-n`/`--offset` can never hide a match. A UUID as the *positional* term searches text, not identity — use this flag |
+| `--url` | []string | — | Select records whose URL matches **exactly** (repeatable; OR-ed), applied before pagination. No normalization or case folding — use `--path`/`--search` for substring matching |
 | `--host` | string | — | Filter by hostname pattern (wildcard supported) |
 | `--method` | []string | — | Filter by HTTP method (repeatable, e.g. --method GET --method POST) |
 | `--status` | []int | — | Filter by HTTP status code (repeatable, e.g. --status 200 --status 404) |
@@ -705,8 +711,8 @@ redirect: `a.example` (301) → `www.a.example` (302) → the 200 that answered.
 | `--from` | string | — | Show records after this date (YYYY-MM-DD or RFC3339) |
 | `--to` | string | — | Show records before this date (YYYY-MM-DD or RFC3339) |
 | `--search` | string | — | Fuzzy search across URLs, paths, and hostnames |
-| `--header` | string | — | Search within HTTP header names and values |
-| `--body` | string | — | Search within HTTP request/response body content |
+| `--header` | string | — | Search **only the header block** of the request/response — not bodies. Use `--search` to span the whole exchange |
+| `--body` | string | — | Search **only the request/response body** — not headers. Use `--search` to span the whole exchange |
 | `--source` | string | — | Filter by record source (e.g. scanner, probe, burp, caido, ingest-cli, ingest-server, ingest-proxy, seed) |
 | `--sort` | string | `created_at` | Sort field: uuid, created_at, sent_at, method, status, time, risk_score, surface_score |
 | `--asc` | bool | `false` | Sort in ascending order (default: descending) |
@@ -742,6 +748,66 @@ Default columns: HOST, METHOD, PATH, STATUS, CONTENT_TYPE, SIZE, WORDS, TIME, TI
 - `vigolium traffic <term>` — fuzzy search
 - `vigolium traffic tree` — tree view
 - `vigolium traffic list` or `ls` — default table view
+- `vigolium traffic body` — extract one message body (below)
+- `vigolium traffic headers` — read one message's headers (below)
+
+### Extracting one message: `traffic body` / `traffic headers`
+
+Both take exactly one `--uuid` and one side — `--response` (the default) or
+`--request` — and always open the source read-only. Neither re-sends anything;
+that is `vigolium replay`.
+
+```bash
+# Save a response body to a file (atomic write, exact bytes)
+vigolium traffic body --uuid <id> -o response.json
+# Pipe it instead
+vigolium traffic body --uuid <id> | jq .
+# Just the receipt: size, sha256, completeness — no body in the output
+vigolium traffic body --uuid <id> -j
+# The request side
+vigolium traffic body --uuid <id> --request -o request.txt
+# Compressed bytes exactly as captured, no decoding
+vigolium traffic body --uuid <id> --representation stored -o body.gz
+
+# Headers as an ordered array — duplicates survive, unlike a map
+vigolium traffic headers --uuid <id> -j
+# Every value of one header, case-insensitively
+vigolium traffic headers --uuid <id> --name set-cookie -j
+```
+
+`--representation` defaults to `decoded` (supported content encodings removed);
+`stored` returns the captured bytes untouched. A body whose decode would be
+partial fails with `body_incomplete` rather than writing a prefix — pass
+`--allow-incomplete` to write it anyway, and the receipt keeps `complete: false`.
+
+These distinguish states that used to collapse into an empty file, each with its
+own `error.code`:
+
+| Condition | `error.code` |
+|---|---|
+| No record with that UUID | `record_not_found` |
+| Record exists, that side was never captured | `body_unavailable` |
+| Announced encoding could not be undone | `body_decode_failed` |
+| Only a prefix is available | `body_incomplete` |
+
+A body that was captured and is genuinely zero-length **succeeds**, with
+`empty: true` in the receipt — that is not the same as never having been
+captured.
+
+### Saving a `-j` result: `-o/--output`
+
+`traffic`, `finding` and `db ls` accept `-o <path>` alongside `-j`: the result
+document goes to the file and a small receipt (path, bytes, sha256, whether the
+file is one page or the whole result) takes its place on stdout. `-o -` forces
+stdout. The file is byte-identical to what the same command prints without `-o`.
+
+```bash
+vigolium finding -j -n 500 -o findings.json
+vigolium traffic -j --compact -n 1000 -o traffic.json
+```
+
+For a rendered report or a bulk dump, `vigolium export -o <path> --format <fmt>`
+is still the right command; `-o` here only saves the `-j` document.
 
 ### Examples
 
