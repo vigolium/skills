@@ -24,7 +24,7 @@ Vigolium extensions are JavaScript files that implement scanner modules using th
 
 - **Active modules**: Send modified requests to detect vulnerabilities
 - **Passive modules**: Analyze existing request/response pairs without sending traffic
-- **Pre/post hooks**: Run before or after the scan pipeline
+- **Pre/post hooks**: Filter or rewrite each input item before modules see it (`pre_hook`), or each result before it is stored (`post_hook`); see [Pre-Hook and Post-Hook](#pre-hook-and-post-hook)
 
 Extensions have access to the full `vigolium.*` API for HTTP requests, database queries, parsing, AI-augmented analysis, OAST (out-of-band) testing, and finding creation.
 
@@ -45,6 +45,7 @@ module.exports = {
 
   // Optional metadata
   description: "Checks for ...",
+  confirmationCriteria: "...",     // how a finding is confirmed; string or array of lines
   scope: "response",               // "request", "response", "both" (passive only)
   tags: ["custom", "light"],       // Module tags for filtering
   scanTypes: ["per_request"],      // "per_request", "per_host", "per_insertion_point"
@@ -52,18 +53,27 @@ module.exports = {
   // Scan functions (implement one or more)
   scanPerRequest: function(ctx) {
     // Analyze the request/response pair
-    // Return a finding object or null
+    // Return a finding object, an array of them, or null
   },
 
   scanPerHost: function(ctx) {
     // Analyze all records for a host
   },
 
-  scanPerInsertionPoint: function(ctx) {
-    // Test a specific insertion point (active modules)
+  scanPerInsertionPoint: function(ctx, insertion) {
+    // Test one insertion point (active modules).
+    // insertion = {name, baseValue, type, buildRequest(payload) -> raw request string}
   }
 };
 ```
+
+A returned finding may override the module defaults per result: `confidence`,
+`tags`, `cwe` (e.g. `"CWE-79"`), `fuzzingParameter` (or `param`), and
+`evidence` (an array of strings or `{request, response, note}` objects).
+
+For editor autocompletion, `vigolium ext types -o <dir>` writes `vigolium.d.ts`
+(also written by `vigolium ext preset`); reference it with
+`/// <reference path="./vigolium.d.ts" />`.
 
 ---
 
@@ -82,6 +92,9 @@ vigolium scan -t https://example.com --ext custom-check.js
 # Run only extensions, skip built-in modules
 vigolium scan -t https://example.com --only extension --ext custom-check.js
 
+# Run extensions together with the built-in dynamic-assessment modules
+vigolium scan -t https://example.com --only dynamic-assessment,extension --ext custom-check.js
+
 # Load multiple extensions
 vigolium scan -t https://example.com --ext check1.js --ext check2.js
 
@@ -99,6 +112,100 @@ vigolium ext preset
 vigolium ext docs
 vigolium ext docs --example
 vigolium ext docs http   # filter by namespace
+vigolium ext docs -j     # API catalog as JSON
+
+# TypeScript declarations for the API (stdout, or -o <file|dir>)
+vigolium ext types -o ./my-extensions/
+```
+
+### Lint, and what happens when an extension does not load
+
+```bash
+vigolium ext lint custom-check.js        # exit 1, error.code lint_failed, on errors
+vigolium ext lint ./my-extensions/ -j    # one document: items = files, summary {files, errors, warnings}
+vigolium ext lint custom-check.js --strict   # warnings fail too
+cat check.vgm.yaml | vigolium ext lint --stdin   # sniffed; --stdin-kind js|ts|yaml to force
+```
+
+- Lint runs the top-level code in the same side-effect-free VM the scan loader uses. Pure APIs (`parse.*`, encoding/hash/regex utils, `log.*`, `payloads()`, `config.*`) run; effectful ones (`http.*`, `utils.exec`/`writeFile`, `db.*`, `ingest.*`, `agent.*`, `oast.*`, `scan.createFinding`) are stubbed and reported as `top-level-effect` warnings with a line. Every namespace exists at load time, so `if (vigolium.db)` feature detection belongs in a handler.
+- Errors: `syntax`, `transpile`, `metadata` (top-level code threw / no `type`), `no-exports` (unless the file has a `// vigolium:script` line), `missing-handler` (a declared `scanTypes` entry, default `per_request`, or a hook's `execute` is not a function), `invalid-type`, `bad-confidence`, `yaml-parse`, `yaml-schema`, `yaml-unknown-key`.
+- Each `-j` issue is `{severity, line, col, message, rule}`; `ok` is false exactly when there are errors.
+- A file passed with `--ext` (or `custom_dir`) that fails to load stops the scan before any request: exit `2`, `error.code` `extension_load_failed`, naming the file and stage. `--ext-allow-failures` scans without it. A failure in the extension directory is a warning only.
+- Every load failure emits `extension.failed` (`module_id`, `path`, `stage`, `explicit`, `message`) on `--events` and appears in `scan.finished.extensions_failed`.
+- YAML unknown keys only warn at load time unless `extensions.yaml_strict: true` (the default flips to true next minor).
+
+### Write an extension, then `ext test` it
+
+The loop: write the file, `ext lint` it, run it against one stored record with `ext run`, then pin what it should and should not report with fixtures and `ext test`. None of these scan anything.
+
+```bash
+# Run it against a stored record (offline: its requests are refused and counted)
+vigolium traffic --compact --fields uuid,url -j
+vigolium ext run --ext check.js --record-uuid 3f2a9c1e -j
+vigolium ext eval --ext check.js --record-uuid 3f2a9c1e -j     # same command, same document
+vigolium ext run --ext probe.js --record-uuid 3f2a9c1e --handler scanPerInsertionPoint --insertion URL_PARAM:id
+vigolium ext run --ext probe.js --record-uuid 3f2a9c1e --allow-network   # really send its requests
+
+# Fixtures next to the extension, then run them
+vigolium ext test ./my-extensions/              # TAP-like; exit 1 if any case fails
+vigolium ext test ./my-extensions/check.js -j   # items = cases; passed / failed / skipped
+```
+
+- `ext run -j`: `items` are the results (`module_id, name, severity, confidence, url, matched, description, param, payload, request, response`), with the module's defaults filled in as a scan fills them. Top level: `module_id, record_uuid, handler, handlers, calls, errors[{handler, insertion, message}], network_allowed, network_calls_blocked, duration_ms`. A handler that threw makes `ok` false and exits `1`; each error message ends with the script position (`check.js:12:9`). An unknown record exits `2` with `record_not_found`, and an extension that does not load exits `2` with `extension_load_failed`.
+- Offline is the default. Every `vigolium.http.*` call throws `network disabled in ext eval; pass --allow-network`, and every refused request counts in `network_calls_blocked`. The database is opened read-only: `vigolium.db.*` reads work, while `ctx.record.annotate`/`addRemarks` and `vigolium.ingest.*` return false. `vigolium.oast` and `vigolium.agent` are not available.
+- Without `--handler`, every handler the `scanTypes` declare runs. `scanPerInsertionPoint` runs on every point the module accepts, unless `--insertion TYPE:name` picks one. An unknown point exits `2` and lists the available ones.
+
+Fixture layout:
+
+```text
+my-extensions/
+  check.js
+  check.fixtures/
+    weak.http                # a raw request, a blank line, a raw response
+    weak.expect.json         # {"findings": [{"name~": "weak csp", "severity": "medium"}]}
+    clean.http               # or put the expectation in the file: // expect: {"findings": 0}
+  probe.js
+  probe.fixtures/
+    reflected.http           # // insertion: URL_PARAM:q
+    reflected.responses/     # canned answers to the extension's own requests
+      search.http            # // match: VIGOLIUM, then "GET /search", a blank line, the response
+```
+
+```http
+// expect: {"findings": [{"name~": "weak content-security-policy", "severity": "medium", "confidence": "firm"}]}
+GET / HTTP/1.1
+Host: app.example.com
+
+HTTP/1.1 200 OK
+Content-Type: text/html
+Content-Security-Policy: default-src *; script-src 'unsafe-inline'
+
+<html></html>
+```
+
+- **Expectation.** `findings` is either a count or a list of matchers. A list is matched in any order and the counts must agree. Matcher keys are `name~` (substring), `name` (exact), `severity` and `confidence`, all case-insensitive. `errors` defaults to `0`. `network_calls_blocked`, `mock_requests`, `handler` and `insertion` are optional. An unknown key is an error, so a typo cannot silently expect nothing.
+- **Directives** (leading `//` lines of a case): `expect`, `handler`, `insertion`, and `url` (the request's origin; default `http://<Host>`). LF line endings are fine, and a declared `Content-Length` is corrected to the body.
+- **Mock responses.** A case with `<case>.responses/` runs against an in-process mock on 127.0.0.1, and the case's `Host` points at it. Each response file holds `METHOD /path` (add `?query` to match the full target), an optional `// match: <text>` that the target or body must contain, a blank line, and then the response. Unmatched requests get a 404 and are listed in `unmatched_requests`. A case without that directory runs offline. `ext test` opens no database.
+- Extensions with no fixtures, and hooks, are reported as `skipped`. A `<name>.fixtures` directory with no extension fails. The bundled presets ship fixtures (`public/presets/extensions/*.fixtures`), and `make test-unit` runs them.
+
+### Module selection applies to extensions
+
+Extension modules have IDs `ext-<id>` and follow the same selection flags as built-in modules:
+
+| Flag | Effect on extensions |
+| --- | --- |
+| `--passive-only` | Active extensions do not run. Pre/post hooks still do. |
+| `--no-passive` | Passive extensions do not run. |
+| `--module-id ext-a` | Only the named extensions run. An `ext-` ID that matches no loaded extension exits `2` (`usage_error`) before any request. |
+| `-m csp`, `-m ext-csp` | Fuzzy match on extension ID and name, like built-ins. |
+| `--module-tag headers` | Selects extensions whose `tags` include it. |
+| `--module-id`/`-m`/`--module-tag` naming only built-ins | Extensions from `--ext` (or `custom_dir`) still run; extensions auto-loaded from the extension directory do not. |
+
+`-m` and `--module-tag` narrow only active modules on `scan`, so passive extensions keep running there. The dynamic-assessment log line reports the selection, for example `extensions: 1 active, 2 passive selected; 1 skipped (1 directory-loaded, narrowed selection)`.
+
+```bash
+# Run one extension and nothing else
+vigolium scan -t https://example.com --ext-dir ./my-extensions/ --module-id ext-my-check
 ```
 
 ---
@@ -125,10 +232,10 @@ module.exports = {
     var headers = ctx.response.headers;
 
     var missing = [];
-    if (!headers["x-frame-options"] && !headers["content-security-policy"]) {
+    if (!headers.get("x-frame-options") && !headers.get("content-security-policy")) {
       missing.push("X-Frame-Options or CSP frame-ancestors");
     }
-    if (!headers["strict-transport-security"]) {
+    if (!headers.get("strict-transport-security")) {
       missing.push("Strict-Transport-Security");
     }
 
@@ -143,6 +250,8 @@ module.exports = {
   }
 };
 ```
+
+Header objects (`ctx.request.headers`, `ctx.response.headers`, every `vigolium.http.*` response) are case-insensitive: `headers.get("x-frame-options")` is the idiom, and `headers["X-Frame-Options"]` reads the same value. `Object.keys(headers)` returns lowercase names. A repeated header reads as its values joined with `", "`, except `set-cookie`, which reads as the last value; use `headers.getAll("set-cookie")` for all of them. `headers.entries()` returns original-case `[name, value]` pairs in wire order, and `headers.raw()` returns the pre-0.7 original-case object.
 
 ### Active Module
 
@@ -184,6 +293,66 @@ module.exports = {
   }
 };
 ```
+
+### Pre-Hook and Post-Hook
+
+Hooks are not modules: they do not scan, they transform what flows through the
+pipeline. Both export `type: "pre_hook"` or `type: "post_hook"` plus a single
+`execute` function (no `scanPerRequest`/`scanPerHost`), and load the same way as
+modules (`--ext`, `--ext-dir`, or the configured extensions dir).
+`vigolium ext example pre_hook` / `ext example post_hook` prints a starter.
+Runtime contract: `pkg/jsext/hooks.go`.
+
+**`pre_hook`** runs once on every input item **before any module sees it**.
+`execute(request)` receives `{raw, method, url, headers}` (`url` is the full
+target URL; `headers` is a name → value object). What it returns decides the
+item's fate:
+
+| Return | Effect |
+|---|---|
+| `null` / `undefined` | **Skip the item**: no module (active or passive) sees it |
+| `{ raw: "GET / HTTP/1.1\r\n..." }` | Replace the whole raw request (original host/service kept). `raw` wins over `headers` |
+| `{ headers: {...} }` | Add or replace these headers on the original request |
+| anything else (e.g. `request` unchanged) | Pass through as-is |
+
+```javascript
+module.exports = {
+  id: "skip-static-assets",
+  type: "pre_hook",
+  execute: function(request) {
+    var path = (vigolium.parse.url(request.url) || {}).path || request.url;
+    if (/\.(css|png|jpe?g|gif|svg|ico|woff2?|ttf|map)$/i.test(path)) return null;
+    return { headers: { "X-Scan-Source": "vigolium" } };
+  }
+};
+```
+
+**`post_hook`** runs on every result a module emits, **before** dedup and
+storage. `execute(result)` receives `{moduleId, url, host, matched, request,
+response, info: {name, description, severity, confidence}}` (`templateId` is an
+alias of `moduleId`). Return `null`/`undefined` to **drop** the result, or an
+object whose `url`, `matched`, `info.name`, `info.description` and
+`info.severity` are copied back onto the result. Any other field you change
+(`info.confidence`, `request`, `host`, …) is ignored.
+
+```javascript
+module.exports = {
+  id: "escalate-admin-paths",
+  type: "post_hook",
+  execute: function(result) {
+    if (result.url.indexOf("/admin") === -1) return result;
+    result.info.severity = "high";
+    result.info.name = result.info.name + " [admin]";
+    return result;
+  }
+};
+```
+
+Hooks chain in load order: each one gets the previous one's output, and the
+first `null` stops the chain. **A hook that throws (or whose `execute` is not a
+function) is skipped with a warning and the item continues unchanged**, so a
+broken hook never filters anything. Watch the log for `Pre-hook error` /
+`Post-hook error` rather than assuming the hook ran.
 
 ---
 
@@ -283,6 +452,7 @@ The global `vigolium.record` also provides access to the current record context.
 ### vigolium.oast (Out-of-Band Testing)
 - `enabled()` — check if OAST service is active
 - `payload(targetURL?, paramName?, injectionType?)` — generate a unique callback URL
+- `url({class?, target?, param?, label?})` — callback URL string (or null) rated as `class` (`ssrf`, `xxe`, `cmdi`, `sqli`, `ssti`, `jndi`, `esi`, … see `OASTClass` in vigolium.d.ts; default `generic`); an unknown class throws and fails `ext lint`
 - `poll(timeoutMs?)` — wait and return all OAST interactions
 
 ### vigolium.db
@@ -501,12 +671,12 @@ module.exports = {
   scanPerInsertionPoint: function(ctx, insertion) {
     if (!vigolium.oast.enabled()) return null;
 
-    // Generate a unique OAST callback URL
-    var oast = vigolium.oast.payload(ctx.request.url, insertion.name, "ssrf");
-    if (!oast) return null;
+    // Generate a unique OAST callback URL; class "ssrf" decides how a callback is rated
+    var cb = vigolium.oast.url({class: "ssrf", target: ctx.request.url, param: insertion.name});
+    if (!cb) return null;
 
     // Inject the callback URL as the parameter value
-    var req = insertion.buildRequest(oast.url);
+    var req = insertion.buildRequest(cb);
     vigolium.http.send(req);
 
     // Wait for out-of-band interactions
@@ -633,7 +803,7 @@ module.exports = {
 
   scanPerRequest: function(ctx) {
     // Look for JWT in Authorization header
-    var auth = ctx.request.headers["authorization"] || ctx.request.headers["Authorization"];
+    var auth = ctx.request.headers.get("authorization");
     if (!auth || auth.indexOf("Bearer ") !== 0) return null;
 
     var token = auth.substring(7);
@@ -880,18 +1050,24 @@ tags:
   - error
   - information-disclosure
   - light
-scanTypes:
+scan_types:
   - per_request
-patterns:
-  - name: "Stack Trace Detected"
-    regex: "(?:at\\s+[\\w.$]+\\(|Traceback \\(most recent|Exception in thread)"
-    severity: suspect
-  - name: "SQL Error Message"
-    regex: "(?:mysql_|pg_|sqlite_|ORA-\\d{5}|SQLSTATE\\[)"
-    severity: medium
-  - name: "Debug Mode Enabled"
-    regex: "(?:DEBUG\\s*=\\s*True|DJANGO_DEBUG|app\\.debug\\s*=)"
-    severity: low
+rules:
+  - match:
+      body_regex: "(?:at\\s+[\\w.$]+\\(|Traceback \\(most recent|Exception in thread)"
+    finding:
+      name: "Stack Trace Detected"
+      severity: suspect
+  - match:
+      body_regex: "(?:mysql_|pg_|sqlite_|ORA-\\d{5}|SQLSTATE\\[)"
+    finding:
+      name: "SQL Error Message"
+      severity: medium
+  - match:
+      body_regex: "(?:DEBUG\\s*=\\s*True|DJANGO_DEBUG|app\\.debug\\s*=)"
+    finding:
+      name: "Debug Mode Enabled"
+      severity: low
 ```
 
-YAML extensions match regex patterns against response bodies and automatically create findings.
+YAML extensions match rules (or `matchers`) against requests and responses and create findings. Keys are snake_case (`scan_types`, `matchers_condition`, `confirmation_criteria`); `ext lint` reports an unknown key with its line and the closest real key. `payloads` are only sent under `scan_types: [per_insertion_point]`.

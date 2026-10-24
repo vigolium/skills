@@ -53,7 +53,7 @@ top of whatever it resolves to.
 
 ```bash
 vigolium fuzz 'https://acme.test/item?id=FUZZ'          # positional URL
-vigolium fuzz -i req.txt                                 # curl / raw HTTP / Burp XML / base64 / URL
+vigolium fuzz -i req.txt                                 # curl / raw HTTP / Burp XML / base64 / URL — text, or a path to a file holding it
 vigolium fuzz --input-file ./req.txt                     # same, read from a file
 vigolium fuzz -u <record-uuid>                           # a stored HTTP record
 cat req.txt | vigolium fuzz --target https://acme.test   # stdin (scheme-less raw → needs --target)
@@ -97,8 +97,20 @@ Resolution order — **first match wins**:
    `--keyword`.
 2. `--point TYPE:name` — one exact insertion point (repeatable).
 3. `--fuzz-header NAME` — one header by name (repeatable).
-4. `--fuzz method|path|params|param-name|headers|cookies|all` — a category.
+4. `--fuzz method|path|params|headers|cookies|all` — a category.
 5. Nothing given → **every discovered insertion point**.
+
+Three opt-in kinds are never in the default set; ask for them by selector:
+
+| Selector | Does | Position type |
+|---|---|---|
+| `--fuzz param-name` | **renames** an existing query/form parameter: `?id=1` → `?PAYLOAD=1` | `PARAM_NAME_URL` / `PARAM_NAME_BODY` |
+| `--fuzz new-param[:query\|body\|json]` (alias `param-add`) | **adds** a parameter named PAYLOAD with a fixed canary value — parameter discovery. Location inferred from the request when omitted (JSON body → json, form body → body, else query) | `NEW_PARAM_QUERY` / `_BODY` / `_JSON` (name `<new>`) |
+| `--fuzz body` | replaces the **entire** body, Content-Length refreshed (needs a body: `-d`) | `ENTIRE_BODY` |
+
+Parameter discovery is `--fuzz new-param -w params --anomaly`: one candidate per
+request, scored against the calibrated baseline. For batched, budgeted mining use
+`vigolium kit param-mine` instead.
 
 `--point` TYPE values are the `httpmsg` insertion-point names:
 
@@ -155,14 +167,24 @@ suffixes are treated as part of the path. Unbound lists stay in the shared pool
 (single-marker runs are unaffected), and inline `-p` payloads are **always**
 shared: there's no sensible place to hang a keyword off a literal.
 
+## Shaping `-j`
+
+`fuzz -j` items are the top-ranked matched results. `--fields` projects them
+(aliases work: `--fields payload,status_code,length` comes back under those
+names), and `--compact` drops each result's `anomaly_reasons`, the top-level
+`anomalies` list and the baseline's raw timing samples. `vigolium schema command
+fuzz` is the shape.
+
 ## Payloads
 
 Combine freely; duplicates are dropped in first-seen order.
 
 ```bash
 --class sqli,xss                # built-in vulnerability classes
--w/--wordlist <builtin|path>    # repeatable
+-w/--wordlist <file|NAME>       # repeatable; NAME: dir-short, dir-long, file-short, file-long, fuzz, params
+                                # ('builtin'/'default' = fuzz; 'builtin:<name>' wins over a file of that name)
 -p/--payload '<literal>'        # inline, repeatable
+--suffix .php,.bak              # also each payload + each suffix, appended literally (ffuf -e)
 ```
 
 **Classes** (`pkg/payloads`, the same catalog behind the JS `vigolium.payloads()`
@@ -172,8 +194,9 @@ API): `cmdi`, `crlf`, `lfi`, `open_redirect`, `path_traversal`, `sqli`, `ssrf`,
 `sql` → `sqli`, `template` → `ssti`.
 
 **Builtin wordlists** (embedded in the binary, no files needed): `fuzz`,
-`dir-short`, `dir-long`, `file-short`, `file-long`. Anything else is read as a
-file path; blank lines and `#` comments are skipped.
+`dir-short`, `dir-long`, `file-short`, `file-long`, `params` (candidate parameter
+names, for `--fuzz new-param`). Anything else is read as a file path; blank lines
+and `#` comments are skipped.
 
 ## Anomaly detection (`-a`)
 
@@ -297,9 +320,10 @@ millisecond threshold.
 
 ## Output
 
-**Default:** JSONL to stdout, one object per send, matched-only unless
-`--all-results`. `--pretty` renders an aligned table; `-o file` writes the JSONL
-to a file.
+**Default:** a human table on stdout, one line per send, matched-only unless
+`--all-results`. `--format jsonl` prints the per-payload stream instead, one
+object per send; `-o file` writes that stream to a file (stdout keeps the table,
+or the `-j` envelope).
 
 ```json
 {"position":"id","position_type":"URL_PARAM","payload":"' OR '1'='1",
@@ -310,20 +334,26 @@ to a file.
  "matched":true,"calibrated":false}
 ```
 
-**Under `-j/--json`** the JSONL streams to **stderr** and ONE summary object goes
-to **stdout** — the agent handle, so you never parse the stream:
+**Under `-j/--json`** ONE envelope goes to **stdout** — the agent handle, so you
+never parse the stream. The ranked top results are `items`; the run summary sits
+beside them, and `total` is the full matched count:
 
 ```json
-{ "target":"https://acme.test", "positions":1, "payloads":13,
+{ "schema_version":1, "command":"fuzz", "kind":"read", "ok":true,
+  "target":"https://acme.test", "positions":1, "payloads":13,
   "sent":13, "matched":1, "calibrated":8, "errors":0,
   "baseline":{"status":200,"length":25,"words":4,"lines":0},
-  "top_results":[…], "anomalies":[…], "anomalies_elided":0,
-  "query":"vigolium scan-request -i '…' -m sqli -j   # confirm with hardened modules" }
+  "pace":{"rate_limit":0,"concurrency":10,"delay_ms":0},
+  "total":1, "items":[…], "anomalies":[…],
+  "query":"vigolium scan-request -i '…' -m sqli -j", "query_argv":[…] }
 ```
 
-`top_results` are ranked most-interesting first (status-changed → reflected →
-largest size delta → slowest). **Run the `query`** — it is a ready
-confirmation command against the hardened module scanner.
+The per-payload stream is not written under `-j` unless `-o` names a file
+(`-j --format jsonl` without `-o` is a usage error: two documents on one stdout).
+
+`items` are ranked most-interesting first (status-changed → reflected →
+largest size delta → slowest). **Run the `query`** (or exec `query_argv`) — it
+is a ready confirmation command against the hardened module scanner.
 
 `--fail-on-match` exits **3** when any result matched, for CI/agent gating.
 
@@ -333,6 +363,7 @@ confirmation command against the hardened module scanner.
 |------|-----------------|
 | `--dry-run` | resolve positions + payloads and print the exact bytes each would send, with **zero** network traffic — the pre-flight before committing to a big run |
 | `-c/--concurrency` | concurrent requests (default 10); lower it through a proxy |
+| `-r/--rate-limit <req/s>` | cap the whole run across all workers, counting baseline and calibration sends (fractions allowed; `0` = unlimited, the default). Smooth, no burst. Not taken from `scanning.rate_limit` — fuzz is a primitive. The effective pace is echoed on stderr and as `pace` in `-j`/`--dry-run` |
 | `--delay <ms>` | per-worker delay before each request — the polite knob for rate-limited targets |
 | `--timeout` | per-request (default 25s); `--max-time` is the curl alias |
 | `--no-redirects` | stop following 30x (following is the default) |

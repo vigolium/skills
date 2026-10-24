@@ -49,7 +49,7 @@ single process against a single database handle:
 vigolium ingest -i a.har -i b.har -i c.yaml
 
 # Or point at a directory (non-recursive, sorted, so re-runs are reproducible).
-vigolium ingest --dir ./captures --dir-glob '*.har' -I har
+vigolium ingest --dir ./captures --dir-glob '*.har' -I har     # one file or many
 ```
 
 A failing source does not discard its siblings — one bad HAR in fifty must not
@@ -59,14 +59,10 @@ failed.
 An empty `--dir` match is a **hard error**: "ingested 0 records" for a typo'd
 path is indistinguishable from an empty capture.
 
-> **Under `-j`, a batch emits one JSON object per source - not one envelope for
-> the run.** `ingest -i a.har -i b.har -j` prints two objects, each with that
-> source's own `records_ingested`. A caller doing `... -j | jq .records_ingested`
-> reads only the **last** source's count and silently undercounts the batch. Sum
-> the objects (`jq -s 'map(.records_ingested) | add'`), or count for real
-> afterwards with `vigolium traffic -j --compact` and read `total`. The human
-> console has the same shape - one "Ingestion completed" line per source, under a
-> single `ingesting N source(s) in one process` header.
+> **A batch emits ONE document for the whole run.** `ingest -i a.har -i b.har -j`
+> prints a single envelope whose `records_ingested` covers every source, so
+> `... -j | jq .records_ingested` is the batch total. The human console prints one "Ingestion completed"
+> line for the run, under the `ingesting N source(s) in one process` header.
 
 > Concurrent `vigolium ingest` processes against one SQLite file are safe (every
 > open sets `busy_timeout`, WAL, and an immediate write lock, so writers
@@ -79,13 +75,13 @@ path is indistinguishable from an empty capture.
 |------|-------------|
 | `-t <url>` | Base URL / target for the ingested data (required for specs that carry only paths) |
 | `-i <file>` | Input file path (`-` for stdin). Repeatable here - see [Batch ingest](#batch-ingest--n-files-one-process) |
-| `-I <format>` | Input format (`urls`, `openapi`, `swagger`, `wsdl`, `burp`, `curl`, `har`, `postman`, `nuclei`, `burpscope`). `vigolium --list-input-mode` prints them with examples |
+| `-I <format>` | Input format. Canonical: `urls`, `nuclei`, `openapi`, `wsdl`, `postman`, `curl`, `burpraw`, `burpxml`, `burpscope`, `har`, `deparos`. Old spellings remain as aliases (`swagger`→`openapi`, `burp`→`burpxml`, `raw`→`burpraw`). `vigolium --list-input-mode` prints them with aliases and examples |
 | `-T <file>` | Target-file: one target URL per line (for `urls`/`burpscope` only - a spec goes through `-i`). Repeatable; a comma in the path is literal |
-| `--input-read-timeout` | Deadline for reading stdin or a file (default `3m`, `0` disables). Raise it when piping a multi-GB export through stdin, where the read itself can outlast the default |
+| `--input-read-timeout` | Deadline for reading stdin (default `3m`; `0` really does disable it now, and a negative value is exit `2`). Raise it when piping a multi-GB export through stdin, where the read itself can outlast the default |
 | `--scan-on-receive` | After ingesting, scan the records (local mode only). `-S` is a **deprecated alias** here and warns — everywhere else `-S` means `--stateless`. |
 | `--spec-url` | Use server URLs from the OpenAPI/Swagger spec |
 | `--spec-header` | HTTP header(s) for OpenAPI/WSDL requests (repeatable) |
-| `--spec-var` | OpenAPI parameter / WSDL element values as `key=value` (repeatable) |
+| `--spec-var` | OpenAPI parameter / WSDL element / Postman `{{variable}}` values as `key=value` (repeatable) |
 | `--spec-default` | Default value for required parameters (default: `1`) |
 | `--disable-fetch-response` | Store request-only (don't fetch responses) |
 | `--scope-origin` | Origin scope mode for filtering |
@@ -101,13 +97,15 @@ path is indistinguishable from an empty capture.
 ## Local vs Remote Mode
 
 - **Local mode** (default): ingests directly into the local SQLite database and fetches HTTP responses.
-- **Remote mode** (`--server <url>` / `-s`): sends records to a running vigolium server via `POST /api/ingest`. Set `VIGOLIUM_API_KEY` (or the server's `--alternative-ingest-key`) for auth.
+- **Remote mode** (`--server <url>` / `-s`): sends records to a running vigolium server via `POST /api/ingest-http`. Set `VIGOLIUM_API_KEY` (or the server's `--alternative-ingest-key`) for auth.
 - `--scan-on-receive` is **ignored in remote mode** — the server decides whether to scan (start it with `--scan-on-receive`; see [server.md](server.md)).
 
 ## Input formats — one example each
 
-`-I` selects the parser. OpenAPI/Swagger and WSDL auto-detect from file content,
-so `-I` is optional for those.
+`-I` selects the parser. Without `-I`, every file format below is detected from
+its content (extension ignored; the detection is logged), so `-I` is optional.
+A file that is mostly not URLs and matches no format fails with
+`input_unparsed` naming the closest format instead of becoming junk targets.
 
 ```bash
 # urls (default) — a single target, or a file of targets.
@@ -165,7 +163,18 @@ vigolium ingest -I openapi -i spec.yaml -t https://api.target.example \
 # Supply concrete values for path/query parameters, with a fallback default.
 vigolium ingest -I openapi -i spec.yaml -t https://api.target.example \
   --spec-var userId=42 --spec-var status=active --spec-default 1
+
+# Credentials for the spec's security schemes: bearer (also oauth2 /
+# openIdConnect) and basic build the Authorization header; a value already
+# starting with "Bearer "/"Basic " is not prefixed twice.
+vigolium ingest -i spec.yaml -t https://api.target.example \
+  --spec-var bearer=$TOKEN --spec-var basic=user:pass
 ```
+
+Required parameters with no example, default or usable schema get a
+type-shaped placeholder (`1`, `true`, the zero UUID) instead of dropping their
+operation; operations that still produce no request are counted in a warning.
+Path values are escaped as one segment (`a/b` → `a%2Fb`).
 
 ### WSDL / SOAP
 
@@ -221,19 +230,42 @@ After ingesting, records are queryable with `vigolium traffic` (filter by
 
 ## `ingest -j` output
 
-The standard envelope, with an empty `items` (`[]` — the payload is the sibling
-fields, not a row array):
+The standard envelope. `items` lists the records the run left in the store (up
+to 50; `items_truncated` says more exist), each `{uuid, uuid_short, method, url,
+status_code}`, so what landed can be read back by UUID:
 
 ```jsonc
 {
-  "schema_version": 1, "command": "ingest", "items": [], "total": 1,
-  "records_ingested": 1,
+  "schema_version": 1, "command": "ingest", "items": [{"uuid": "…", "uuid_short": "3f2a9c1e", "method": "GET", "url": "…", "status_code": 200}], "total": 30,
+  "records_ingested": 30,         // rows the database now HOLDS
+  "records_failed": 0,            // read, but not stored — see below
+  "records_skipped": 0,           // dropped on purpose (static asset, out of scope)
   "input_format": "har",          // what was PARSED  (har, burp, openapi, urls…)
   "record_source": "ingest-cli",  // what was STORED in http_records.source
   "duration_ms": 336,
   "query": "vigolium traffic --json -n 20"
 }
 ```
+
+**`records_ingested` is what the database holds**, not what was attempted.
+`select count(*) from http_records` after the run equals it.
+
+**`records_failed > 0` exits `1`** with `error.code: "ingest_incomplete"` — a
+record was read and could not be stored. Why is in `failure_reasons` (counts) and
+`failures` (the first 20, each `{url, reason, detail}`), and the error message
+names the dominant reason and its fix:
+
+| Reason | Meaning | Fix |
+|---|---|---|
+| `blocked` | the answer was a WAF / bot-wall page | `--keep-blocked` stores it, remark `blocked:<reason>`; or `--disable-fetch-response` |
+| `fetch_error` | DNS, connect, TLS or timeout | `--disable-fetch-response` stores the request without fetching |
+| `quarantined` | the host was quarantined as unresponsive | as above |
+| `budget` | `--max-requests[-per-host]` refused the send | raise the budget |
+| `store_error` | the database refused the write | check the store (`vigolium db stats`) |
+| `out_of_scope` | out of scope with `scope.applied_on_ingest` set | widen the scope |
+ `records_skipped` is NOT a failure:
+those records were dropped by the static-asset carve-out or by
+`scope.applied_on_ingest`, which is the configuration doing its job.
 
 **`input_format` and `record_source` are two different vocabularies** and must
 not be crossed: `--source` on a read filters by the *record source*, so

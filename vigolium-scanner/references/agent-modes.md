@@ -22,11 +22,23 @@ Which one do I want?
 | Inspect past agent runs | `agent session` |
 
 All dispatch routes through the in-process **olium** engine — there are no
-subprocess SDK backends. Providers come from `agent.olium.provider` in
-`vigolium-configs.yaml` or per-run flags (`--provider`, `--model`,
+subprocess SDK backends. The provider is **auto-detected unless
+`agent.olium.provider` is set** (the generated config sets `openai-compatible`
+→ a local Ollama); override it per run with `--provider`, `--model`,
 `--oauth-cred`, `--oauth-token`, `--llm-api-key`, `--gcp-project`,
-`--gcp-location`). The one exception is the `agent audit` **audit leg**, which
+`--gcp-location`. The one exception is the `agent audit` **audit leg**, which
 drives the `claude` or `codex` CLI directly.
+
+**Machine output.** Under `-j`, `agent autopilot` / `swarm` / `audit` print one
+run document (`kind: "scan"`: `agentic_scan_uuid`, `status`, `completeness`,
+`stop_reason`, `usage`, `budget`, `counts_by_severity`, `total`, top `items`,
+`errors`, `query`) with the live stream on stderr; `agent query` prints a read
+envelope with the result in `items[0]`; `agent triage` a mutation document;
+`agent session` / `--list-agents` / `--list-templates` / `audit --list-modes`
+read envelopes. A run stopped by `--max-duration` (`timed_out`), a budget
+(`budget_exhausted`) or failed audit drivers (`completed_with_errors`) exits
+**5** after its document. `provider_missing` / `preflight_failed` (exit 1)
+mean nothing ran. Full contract: docs/coding-agent.md, "AI / agentic scans".
 
 ## Table of Contents
 
@@ -112,7 +124,9 @@ Send a freeform prompt to an AI agent without templates or structured output. Pr
 | `--source-label` | — | string | — | Label for records ingested from agent output (e.g. `agent-review`) |
 | `--stdin` | — | bool | `false` | Read prompt from stdin |
 | `--upload-results` | — | bool | `false` | Upload session bundle to cloud storage after completion (requires storage config) |
-| `--provider` | — | string | — | Olium provider override: `openai-compatible` \| `openai-codex-oauth` \| `openai-api-key` \| `openai-responses` \| `anthropic-api-key` \| `anthropic-oauth` \| `anthropic-cli` \| `anthropic-compatible` \| `anthropic-claude-sdk-bridge` \| `anthropic-vertex` \| `google-vertex` (falls back to `agent.olium.provider`) |
+| `--preflight-timeout` | — | duration | `0` | Deadline of the provider preflight ping (0 = `agent.olium.preflight_timeout`: 15s, 60s for a local Ollama/LM Studio endpoint) |
+| `--no-preflight` | — | bool | `false` | Skip the provider preflight ping |
+| `--provider` | — | string | — | Olium provider override: `openai-compatible` \| `openai-codex-oauth` \| `openai-api-key` \| `openai-responses` \| `anthropic-api-key` \| `anthropic-oauth` \| `anthropic-cli` \| `anthropic-compatible` \| `anthropic-claude-sdk-bridge` \| `anthropic-vertex` \| `google-vertex` (default: `agent.olium.provider`; auto-detected when unset) |
 | `--model` | — | string | — | Olium model id override (falls back to `agent.olium.model`) |
 | `--oauth-cred` | — | string | — | Olium OAuth/SA credential file (openai-codex-oauth, anthropic-vertex, or google-vertex; falls back to `agent.olium.oauth_cred_path` or `$GOOGLE_APPLICATION_CREDENTIALS`) |
 | `--oauth-token` | — | string | — | Claude Code OAuth bearer token (`anthropic-oauth`; falls back to `agent.olium.oauth_token` or `$ANTHROPIC_API_KEY`) |
@@ -132,9 +146,6 @@ vigolium agent query --prompt 'analyze the authentication flow'
 
 # Pipe prompt from stdin
 echo "check for SQL injection in the login handler" | vigolium agent query --stdin
-
-# With specific agent
-vigolium agent query --agent claude 'find XSS vulnerabilities'
 
 # With source code context
 vigolium agent query 'explain the auth flow' --source ./src
@@ -175,9 +186,11 @@ vigolium agent query --prompt-template security-code-review --source ./src \
 
 Launch an AI agent that autonomously discovers, scans, and triages vulnerabilities by driving the vigolium CLI. The operator runs through the in-process olium engine with full coding-agent tools (Read, Grep, Glob, Bash, Edit, Write).
 
-Autopilot runs a **single autonomous operator session**. When `--source` is set, an audit harness runs first, the whitebox context is prepared natively, and then one operator agent handles recon, validation, scanning, exploit attempts, and reporting.
+Autopilot runs a **single autonomous operator session**. When `--source` is set the operator reads the code; one operator agent handles recon, validation, scanning, exploit attempts, and reporting.
 
-**Audit-harness auto-pick:** when neither `--audit` nor `--piolium` is explicitly set, autopilot picks **piolium** if `pi` + the piolium Pi extension are installed, otherwise falls back to the embedded **vigolium-audit** at lite. Force piolium with `--piolium <mode>` (auto-disables vigolium-audit for the run); force vigolium-audit with `--audit <mode>`; disable both with `--audit=off`.
+**Audit harness: off unless asked for.** A nested audit harness (a `claude`/`codex` CLI via vigolium-audit, or piolium) runs before the operator only when `--audit <mode>` or `--piolium <mode>` is passed (both need `--source`); the intensity preset never turns one on. `--piolium <mode>` alone turns `--audit` off. The run document echoes the choice as `audit_harness: {mode, piolium, harness, agent_cli}` (`agent_cli` is `claude` for vigolium-audit, `pi` for piolium).
+
+**Budgets:** `--max-commands` (tool calls; default from `--intensity`), `--token-budget` (input+output tokens), `--max-cost-usd` (estimated spend), `--max-duration` (wall clock). Hitting one stops the run cleanly: `status: budget_exhausted` (`timed_out` for `--max-duration`), exit 5.
 
 ### Positional prompt
 
@@ -216,9 +229,15 @@ When input is piped via stdin, it is automatically read (no `--input` needed). T
 | `--knowledge-base-raw` | — | bool | `false` | Skip the LLM distillation of `--knowledge-base`: front-load a deterministic document index only (offline / reproducible). No-op without `--knowledge-base` |
 | `--knowledge-base-no-traffic` | — | bool | `false` | Do not parse HTTP-traffic-format files found in `--knowledge-base` into normal traffic; treat every file as prose docs instead (by default such files are ingested as `source=knowledge-base`). No-op without `--knowledge-base` |
 | `--source` | — | string | — | Path to application source code for source-aware scanning |
+| `--auth-file` | — | []string | — | Native session file, as `scan --auth-file` takes (repeatable). The sessions log in before the run (a failed login stops it), the pre-scan uses them, and they are stored for the target so the operator's `list_auth_sessions`/`replay_request` can use them |
 | `--files` | — | []string | — | Specific files to include (relative to `--source`) |
-| `--audit` | — | string | `lite` | vigolium-audit mode run before the operator: `lite` (3-phase), `balanced` (9-phase), `deep` (12-phase), `mock`, or `off` to disable. Default `lite` when `--source` is set |
-| `--piolium` | — | string | — | Piolium audit mode: `lite`, `balanced`, `deep`, `longshot`, etc. Empty triggers auto-pick (piolium when `pi` is installed, else vigolium-audit). Setting `--piolium` explicitly forces piolium and turns `--audit` off |
+| `--audit` | — | string | `off` | Nested vigolium-audit harness run before the operator (a `claude`/`codex` CLI; needs `--source`): `lite` (3-phase), `balanced` (9-phase), `deep` (12-phase), `mock`, or `off`. Off unless passed |
+| `--piolium` | — | string | — | Nested piolium harness (needs `--source`): `lite`, `balanced`, `deep`, `longshot`, etc. Empty = off. Setting it turns `--audit` off |
+| `--max-commands` | — | int | `0` | Tool-call budget for the operator (0 = the `--intensity` preset: quick 150, balanced 750, deep 3000); hitting it → `budget_exhausted`, exit 5 |
+| `--token-budget` | — | int | `0` | Cap on the operator's input+output tokens (0 = none); hitting it → `budget_exhausted`, exit 5 |
+| `--max-cost-usd` | — | float | `0` | Cap on the operator's estimated spend in USD, priced per turn (0 = none); hitting it → `budget_exhausted`, exit 5 |
+| `--preflight-timeout` | — | duration | `0` | Deadline of the provider preflight ping (0 = `agent.olium.preflight_timeout`) |
+| `--no-preflight` | — | bool | `false` | Skip the provider preflight ping |
 | `--diff` | — | string | — | Focus on changed code: PR URL, git ref range (`main...branch`), or `HEAD~N` |
 | `--last-commits` | — | int | `0` | Focus on last N commits (shorthand for `--diff HEAD~N`) |
 | `--max-duration` | — | duration | `6h` | Maximum wall-clock duration for the autopilot session |
@@ -344,6 +363,11 @@ vigolium agent swarm "scan all source code from ~/src/crAPI, ~/src/DVWA"
 | `--all-records` | — | bool | `false` | Use every HTTP record in the active project as input |
 | `--records-from` | — | string | — | Filter ingested HTTP records by spec (e.g. `host=example.com,status=200,method=GET,path=/api,since=2026-04-01`) |
 | `--source` | — | string | — | Path to application source code for route discovery |
+| `--max-commands` | — | int | `0` | Tool-call budget across every agent call of the run (0 = none); hitting it → `budget_exhausted`, exit 5 |
+| `--token-budget` | — | int | `0` | Cap on the run's input+output tokens across every agent call (0 = none) |
+| `--max-cost-usd` | — | float | `0` | Cap on the run's estimated spend in USD (0 = none) |
+| `--preflight-timeout` | — | duration | `0` | Deadline of the provider preflight ping (0 = `agent.olium.preflight_timeout`) |
+| `--no-preflight` | — | bool | `false` | Skip the provider preflight ping |
 | `--files` | — | []string | — | Specific source files to include (relative to `--source`) |
 | `--prompt` | — | string | — | Free-text task guidance for the agent (same as the positional `[prompt]`; use `--plan-file` for a whole plan with seed HTTP requests) |
 | `--vuln-type` | — | string | — | Vulnerability type focus (e.g. sqli, xss, ssrf) |
@@ -380,16 +404,19 @@ vigolium agent swarm "scan all source code from ~/src/crAPI, ~/src/DVWA"
 | `--cookie` | — | []string | — | Session cookie `name=value` pair, injected into recon/discovery/scan as a `Cookie:` header (repeatable; direct auth injection) |
 | `--header` | `-H` | []string | — | Inject an HTTP header into recon/discovery/scan (repeatable; e.g. `-H 'Authorization: Bearer xxx'`) |
 | `--login-curl` | — | string | — | Curl command for the login flow; replayed to capture a fresh session, then reused for the scan |
-| `--auth-config` | — | string | — | Path to an existing `auth-config.yaml`; skips browser auth and `--cookie`/`--header`/`--login-curl` synthesis |
-| `--audit` | — | string | — | Run background vigolium-audit in parallel: `lite` (default if flag is bare), `balanced`, `deep`. Requires `--source` |
-| `--piolium` | — | string | — | Run background piolium audit (Pi runtime): `lite`, `balanced`, `deep`, `longshot`, etc. Requires `--source`. Empty triggers auto-pick when `--audit` is also empty (piolium when `pi` is installed, else nothing) |
+| `--auth-config` | — | string | — | Path to an existing agent-format `auth-config.yaml` (a native session file is detected and loaded as `--auth-file`); skips browser auth and `--cookie`/`--header`/`--login-curl` synthesis. Mutually exclusive with `--auth-file` |
+| `--auth-file` | — | []string | — | Native session file, as `scan --auth-file` takes (multi-step, OAuth2, check/reauth kept); repeatable, validated before the run. One file is passed to the native phases as is, several are merged into `auth-config.yaml`. Skips browser auth and inline-auth synthesis |
+| `--audit` | — | string | `off` | Nested vigolium-audit harness run alongside the swarm (a `claude`/`codex` CLI; needs `--source`): `lite` (bare `--audit`), `balanced`, `deep`, or `off`. Off unless passed |
+| `--piolium` | — | string | — | Nested piolium harness (a `pi` CLI; needs `--source`): `lite`, `balanced`, `deep`, `longshot`, etc. Empty = off; an installed `pi` is never picked automatically. Wins over `--audit` |
 | `--diff` | — | string | — | Focus on changed code: PR URL, git ref range (`main...branch`), or `HEAD~N` |
 | `--last-commits` | — | int | `0` | Focus on last N commits (shorthand for `--diff HEAD~N`) |
 | `--intensity` | — | string | `balanced` | Scan intensity preset: `quick`, `balanced`, or `deep` (see [Intensity Presets](#intensity-presets)) |
 | `--upload-results` | — | bool | `false` | Upload scan results to cloud storage after completion (requires storage config) |
 | `--disable-guardrail` | — | bool | `false` | Skip the prompt-safety classifier on the natural-language prompt (use only when refusing a known-good prompt) |
 
-At least one input is required: `--target`, `--input`, `--record-uuid`, `--all-records`, `--records-from`, `--source`, or piped stdin. `--source` requires `--target` for hostname filtering. `--audit` and `--piolium` both require `--source`. The browser is always available (there is **no** `--browser` flag). Swarm also accepts the shared olium provider override flags (`--provider`, `--model`, `--oauth-cred`, `--oauth-token`, `--llm-api-key`, `--base-url`, `--gcp-project`, `--gcp-location`) — note `--system` is olium-TUI-only and is **not** on swarm.
+At least one input is required: `--target`, `--input`, `--record-uuid`, `--all-records`, `--records-from`, `--source`, or piped stdin. `--source` requires `--target` for hostname filtering. `--audit` and `--piolium` both require `--source`.
+
+**Audit harness: off unless asked for.** Swarm launches a nested coding-agent CLI (vigolium-audit → `claude`/`codex`, piolium → `pi`) only when `--audit <mode>` or `--piolium <mode>` is passed, or the natural-language prompt explicitly asks for an audit; the intensity preset never turns one on and an installed `pi` is never auto-picked. The run document echoes the choice as `audit_harness: {mode, piolium, harness, agent_cli}` (`{"mode":"off"}` when none ran). The browser is always available (there is **no** `--browser` flag). Swarm also accepts the shared olium provider override flags (`--provider`, `--model`, `--oauth-cred`, `--oauth-token`, `--llm-api-key`, `--base-url`, `--gcp-project`, `--gcp-location`) — note `--system` is olium-TUI-only and is **not** on swarm.
 
 ### Swarm Phases
 
@@ -662,7 +689,7 @@ If one driver fails under `--driver=both`, the other still runs — the parent r
 | `--mode` | — | string | (from intensity) | Single mode override. Shared (allowed under `auto`/`both`): `lite`, `balanced`, `deep`, `revisit`, `confirm`, `merge`. Driver-specific (require `--driver=audit\|piolium`): audit = `reinvest`/`refresh`/`mock`/`diff`/`status`, piolium = `longshot`/`smoke`/`diff`/`status` |
 | `--modes` | — | string | — | Run a chain of modes back-to-back, comma-separated (e.g. `deep,refresh,confirm`). Overrides `--mode`/`--intensity`; stops on the first non-complete mode. Audit runs the chain natively; piolium chains via sequential runs collapsed into one row; under `auto`/`both`, modes a driver can't run are skipped on that leg |
 | `--list-modes` | — | bool | `false` | Print the vigolium-audit mode graph (phases, time estimate, descriptions) and exit |
-| `--source` | — | string | `.` | Source: local directory, git URL, `gs://<project>/<key>` archive, or local archive (`.zip / .tar.gz / .tar.bz2 / .tar.xz`) |
+| `--source` | — | string | — | **Required.** Source: local directory (`--source .` for the working directory), git URL, `gs://<project>/<key>` archive, or local archive (`.zip / .tar.gz / .tar.bz2 / .tar.xz`). Missing → usage error, exit 2 |
 | `--interactive` | `-i` | bool | `false` | Drop into the coding agent with the audit harness installed and drive it yourself (audit-only). Skips streaming, the AgenticScan row, and findings import — results land in `<source>/vigolium-results/`; import them afterward. Not valid with `--driver=piolium` |
 | `--commit-depth` | — | int | `1` | `git clone --depth` value when `--source` is a git URL (0 = full history; deep intensity uses 0) |
 | `--no-stream` | — | bool | `false` | Don't echo agent output to the console (still written to `{session}/<driver>/runtime.log`) |
@@ -695,7 +722,7 @@ If one driver fails under `--driver=both`, the other still runs — the parent r
 ### The piolium driver
 
 Reached with `--driver=piolium` (or as the `auto` fallback). There is **no**
-`vigolium agent piolium` command.
+`agent piolium` subcommand.
 
 Drives the user's installed **piolium** Pi extension via
 `pi --mode json -p /piolium-<mode>` against the resolved source tree, syncs audit
@@ -710,7 +737,7 @@ the database.
 |------|-------|------|---------|-------------|
 | `--intensity` | — | string | `balanced` | Audit intensity preset: `quick` (lite + shallow clone), `balanced` (default), `deep` (deep + full clone history). Explicit `--mode` / `--commit-depth` always override |
 | `--mode` | — | string | (from intensity) | Audit mode override: `lite`, `balanced`, `deep`, `revisit`, `confirm`, `merge`, `diff`, `longshot`, `status`, `smoke` |
-| `--source` | — | string | `.` | Source: local directory, git URL, `gs://<project>/<key>` archive, or local archive (`.zip / .tar.gz / .tar.bz2 / .tar.xz`) |
+| `--source` | — | string | — | **Required.** Source: local directory (`--source .` for the working directory), git URL, `gs://<project>/<key>` archive, or local archive (`.zip / .tar.gz / .tar.bz2 / .tar.xz`). Missing → usage error, exit 2 |
 | `--commit-depth` | — | int | `1` | `git clone --depth` value when `--source` is a git URL (0 = full history) |
 | `--no-stream` | — | bool | `false` | Don't echo agent output to the console (still written to `{session}/runtime.log`) |
 | `--upload-results` | — | bool | `false` | Upload session bundle to cloud storage after completion (requires storage config) |
@@ -827,15 +854,29 @@ vigolium agent audit --driver=piolium --source . --plm-scan-since "30 days ago" 
 
 **Usage:** `vigolium agent triage [finding-id] [flags]`
 
-AI-confirm a single stored finding as real vs false positive, writing the verdict back to the database: a `false_positive` verdict downgrades the finding's severity to `info`; a confirmed verdict sets its status to `triaged`. Picks one finding by ID (or the most recent when omitted). This is a targeted one-finding pass — for a run-wide triage sweep use `agent autopilot --triage` / `agent swarm --triage`.
+AI-confirm a single stored finding. The verdict is one of:
+
+- `confirmed` → status `confirmed`; severity unchanged.
+- `false_positive` → status `false_positive`; **severity kept as reported** (the status alone takes it out of `--fail-on` gates, `scan diff` and `--new-since`); the reasoning is appended to the description.
+- `inconclusive` → nothing written (the evidence settled neither way).
+
+Every write lands in the finding's status history (actor `agent-triage`, the reasoning as its note). Picks one finding by ID (or a TUI picker when omitted; `-j` requires the ID). The run gets its own `agentic_scans` row (mode `triage`); its UUID and session dir are printed to stderr. This is a targeted one-finding pass — for a run-wide triage sweep use `agent autopilot --triage` / `agent swarm --triage`.
 
 ```bash
 # Triage a specific finding by ID
 vigolium agent triage 42
 
+# Report the verdict only, write nothing; machine-readable
+vigolium agent triage 42 --no-write -j
+
+# Decide offline from the captured traffic (no HTTP/browser/shell tools)
+vigolium agent triage 42 --no-probe
+
 # Preview the rendered triage prompt without calling the agent or writing to the DB
 vigolium agent triage 42 --dry-run
 ```
+
+Under `-j`: a mutation document, `items: [{finding_id, verdict, reasoning, old_severity, new_severity, old_status, new_status, written, agentic_scan_uuid}]`, `changed` = `written`.
 
 ### agent triage flags
 
@@ -843,6 +884,10 @@ vigolium agent triage 42 --dry-run
 |------|-------|------|---------|-------------|
 | `--max-duration` | — | duration | `5m` | Maximum wall-clock time for the triage run (0 = no limit) |
 | `--dry-run` | — | bool | `false` | Render the triage prompt and exit without calling the agent or writing to the DB |
+| `--no-write` | — | bool | `false` | Report the verdict without writing it (alias `--report-only`) |
+| `--no-probe` | — | bool | `false` | Do not contact the target: no HTTP, browser or shell tools; decide from the captured traffic (`inconclusive` when that cannot settle it) |
+| `--preflight-timeout` | — | duration | `0` | Deadline of the provider preflight ping (0 = `agent.olium.preflight_timeout`) |
+| `--no-preflight` | — | bool | `false` | Skip the provider preflight ping |
 | `--show-prompt` | — | bool | `false` | Print the rendered prompt to stderr before executing |
 | `--verbose` | `-v` | bool | `false` | Show a per-tool head/tail preview of each tool result alongside the one-liner |
 
@@ -904,13 +949,13 @@ vigolium agent session --tui
 
 ### Autopilot intensity
 
-`Command Budget` is the internal operator command cap (there is no `--max-commands` flag). `Audit Mode` is the vigolium-audit / piolium harness mode run before the operator when `--source` is set.
+`Command Budget` is the operator's tool-call cap (`--max-commands` overrides it). The presets no longer pick an audit harness: pass `--audit` / `--piolium` explicitly.
 
-| Preset | Command Budget | Timeout | Audit Mode | Browser |
-|--------|---------------:|--------:|------------|:-------:|
-| `quick` | 150 | 1h | `lite` | on |
-| `balanced` (default) | 500 | 6h | `balanced` | on |
-| `deep` | 1500 | 12h | `deep` | on |
+| Preset | Command Budget | Timeout | Browser |
+|--------|---------------:|--------:|:-------:|
+| `quick` | 150 | 1h | on |
+| `balanced` (default) | 750 | 6h | on |
+| `deep` | 3000 | 12h | on |
 
 ### Swarm intensity
 
@@ -920,7 +965,7 @@ vigolium agent session --tui
 | `balanced` (default) | on | on | on | on | off | 12h | 3 |
 | `deep` | on | on | on | on | on | 24h | 5 |
 
-Note: Code Audit only takes effect when `--source` is given; Auth only takes effect when the browser is enabled.
+Note: Code Audit only takes effect when `--source` is given; Auth only takes effect when the browser is enabled. Code Audit is swarm's in-process olium phase; the presets never start a nested audit harness (pass `--audit` / `--piolium`).
 
 ### Audit / Piolium intensity
 
@@ -1032,7 +1077,7 @@ agent:
 
 | Provider | Auth | Description |
 |----------|------|-------------|
-| `openai-compatible` | `custom_provider.api_key` (optional) | Any OpenAI Chat-Completions-compatible endpoint via `custom_provider.base_url` / `model_id`. **Default** (points at a local Ollama at `http://localhost:11434/v1`, model `gemma4:latest`). |
+| `openai-compatible` | `custom_provider.api_key` (optional) | Any OpenAI Chat-Completions-compatible endpoint via `custom_provider.base_url` / `model_id`. The generated config selects it (a local Ollama at `http://localhost:11434/v1`, model `gemma4:latest`); with `agent.olium.provider` unset the provider is auto-detected. |
 | `openai-codex-oauth` | `~/.codex/auth.json` (via `codex login`) | OpenAI Codex via ChatGPT subscription. |
 | `anthropic-api-key` | `llm_api_key` or `$ANTHROPIC_API_KEY` | Anthropic Claude via Messages API. |
 | `anthropic-oauth` | `oauth_token` or `$ANTHROPIC_API_KEY` (bearer minted by `claude setup-token`) | Anthropic Claude via Claude Code OAuth bearer token. |
@@ -1064,7 +1109,7 @@ These flags map onto `agent.olium.*` for one run only — they're accepted on `a
 vigolium agent --list-agents
 ```
 
-Prints the configured olium providers as a table (PROVIDER, MODEL, AUTH, DESCRIPTION, ACTIVE), with the active default marked. Use `--json` for machine-readable output.
+Prints the olium providers as a table (PROVIDER, MODEL, AUTH, DESCRIPTION, ACTIVE) with the one a run would use marked: `agent.olium.provider` when set, otherwise the auto-detected one. `-j` prints a read envelope with `active` and `active_source` (`config` or `auto-detect`).
 
 ---
 
